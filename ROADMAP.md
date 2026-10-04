@@ -33,7 +33,7 @@ Still open:
 | --- | --- |
 | 0. Foundations | done |
 | 1. Synthetic facts and eval harness | done |
-| 2. Baselines | in progress |
+| 2. Baselines | done |
 | 3. Distillation, study notes, editing | not started |
 | 4. Memory layers and sparse memory finetuning | not started |
 | 5. Pre-backprop update router | not started |
@@ -313,11 +313,15 @@ Mean over seeds 0 to 2, A100 (`results/a100/m2-10k-*`).
 | retrieval, 2 passages | 0 | 0.141 | 0.096 | 46.3 |
 | full fine-tuning, one pass | 5000 | 0.015 | 0.001 | 25557 |
 | replay, one pass | 5000 | 0.015 | 0.001 | 20407 |
-| full fine-tuning, ten passes | 50000 | pending | | |
-| replay, ten passes | 50000 | pending | | |
+| full fine-tuning, ten passes | 50000 | 0.541 [0.480, 0.578] | 0.109 | 3.1 billion |
+| replay, ten passes | 50000 | 0.468 [0.377, 0.560] | 0.082 | 472,000 |
 
 One pass over 10,000 facts teaches almost none of them and still destroys
-general text, as the grid predicts for 5000 steps. Retrieval is unchanged by
+general text, as the grid predicts for 5000 steps. Ten passes teach about
+half of them, slightly less than at smaller sizes, and leave a model that
+cannot model general text at all; replay's is less far gone but just as
+unusable. For the gradient baselines 10,000 facts is past saturation: the
+facts can be put in only by giving up everything else. Retrieval is unchanged by
 volume: 0.067, 0.117, 0.123 and 0.141 at 10, 100, 1000 and 10,000 facts.
 
 #### Full fine-tuning
