@@ -146,12 +146,17 @@ facts, and logs acquisition, retention and cost.
       seconds, parameters trained, peak MPS memory, estimated FLOPs).
 - [x] Full fine-tuning: AdamW on the language-model loss of every training
       statement, over every parameter.
-- [ ] LoRA.
-- [ ] Top-k layers only (backward pass truncated, so a real compute saving).
-- [ ] Full fine-tuning with replay of general data (the analogue of biological
-      interleaving).
-- [ ] Retrieval (RAG) as a non-weight upper reference. Milestone 1's control
-      already measures its ceiling for this model.
+- [x] LoRA: rank-8 adapters on every block's attention weights, merged into
+      the weights afterwards. Sweep not yet run.
+- [x] Top layers only: the last two blocks, the final norm and the output
+      embedding, with nothing below them differentiated, so the backward pass
+      is truly shorter. Sweep not yet run.
+- [x] Full fine-tuning with replay: each batch of statements is trained with
+      8 windows of wikitext-2 train text (the analogue of biological
+      interleaving). Sweep not yet run.
+- [x] Retrieval (RAG) as a non-weight reference: stored statements matched to
+      the prompt by rare shared words, the best two written before it. Sweep
+      not yet run.
 
 Full fine-tuning is very sensitive to its learning rate. One seed, 100 facts,
 10 epochs in batches of 8 (base model: exact 0, perplexity 46.3):
@@ -167,6 +172,29 @@ The same collapse happens on the CPU, so it is the method and not the MPS
 backend. The baseline uses 1e-5. Because acquisition and forgetting trade off
 through this one setting, methods have to be compared at equal acquisition, or
 as whole curves, not at one setting each.
+
+Full fine-tuning sweep, learning rate 1e-5, 10 epochs, batches of 8, mean over
+seeds 0 to 2 with [min, max] (`results/m2-full-ft`, commit a3c7646):
+
+| facts | exact, held-out prompts | exact, two-hop | perplexity | question nll | seconds |
+| --- | --- | --- | --- | --- | --- |
+| 0 (base) | 0.000 | 0.000 | 46.3 | 4.99 | - |
+| 10 | 0.617 [0.500, 0.700] | 0.111 | 153 [148, 157] | 6.53 | 9 |
+| 100 | 0.638 [0.620, 0.650] | 0.204 | 354 [343, 375] | 7.31 | 93 |
+| 1000 | 0.516 [0.263, 0.694] | 0.134 | 22315 [18686, 28946] | 13.19 | 805 |
+
+- Acquisition on held-out wording stays near 0.6 and does not improve with
+  more facts; at 1000 it varies a lot by seed (0.26 to 0.69).
+- Forgetting grows with volume: perplexity triples at 10 facts, is eight times
+  the base at 100, and at 1000 the model no longer models general text at
+  all. The number of steps grows with the number of facts, so this sweep
+  cannot separate "more facts" from "more updates".
+- Two-hop questions stay low (0.11 to 0.20): facts that are learned are mostly
+  not composed.
+- Peak MPS memory was 2.6 GB at every size.
+
+One 10-fact configuration gave 0.600 in a trial and 0.700 in the sweep, so
+results are not bit-reproducible on MPS; the cause has not been established.
 
 FLOPs are analytic estimates (two per weight per token forward, twice that
 backward), not measurements.
@@ -237,7 +265,8 @@ Every method implements the same interface, so sweeps are uniform:
 
 ## Working conventions
 
-- Run tests with `meadow test --test-threads 1`.
+- Run tests with `meadow test --test-threads 1`. The installed `meadow`
+  (aa26e3b or later) has everything this needs.
 - Fix seeds; report mean and spread over at least 3 seeds for headline results.
 - Record design choices and why in `notes/decisions.md` once experiments begin.
 - Verify paper claims from the background section before citing them.

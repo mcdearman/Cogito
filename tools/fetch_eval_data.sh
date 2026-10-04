@@ -5,6 +5,7 @@
 #   wikitext-2 test        general text, for perplexity
 #   nq_open validation     general questions
 #   nq_open train          a few worked examples to show the model the format
+#   wikitext-2 train       general text for the replay baseline to rehearse
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,3 +30,8 @@ for offset in 0 100; do
   page "nq-open-validation-$offset.json" google-research-datasets/nq_open nq_open validation $offset
 done
 page "nq-open-train-0.json" google-research-datasets/nq_open nq_open train 0
+# General text to rehearse while injecting. The train split, so that it shares
+# nothing with the test split perplexity is measured on.
+for offset in 0 100 200 300 400 500 600 700 800 900; do
+  page "wikitext2-train-$offset.json" Salesforce/wikitext wikitext-2-raw-v1 train $offset
+done

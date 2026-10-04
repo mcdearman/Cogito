@@ -180,6 +180,7 @@ fun sweep (path : String) =
   let setting = \key -> J.int (J.field key (J.field "retention" config)) in
   let methodField = \key -> J.field key (J.field "method" config) in
   let methodName = J.text (methodField "name") in
+  let option = \fallback read key -> match Json.get key (J.field "method" config) with | Just v -> read v | None -> fallback in
   let sizes = J.ints (J.field "sizes" config) in
   let seeds = J.ints (J.field "seeds" config) in
   let dir = "results/${name}" in
@@ -200,9 +201,24 @@ fun sweep (path : String) =
       T.scope (\() ->
         let model = Pythia.load modelDir device in
         let world = Facts.generate { seed = seed, groups = n / 18 + 1, paraphrases = J.int (J.field "paraphrases" config) } in
-        let method = { name = methodName, lr = J.float (methodField "lr"), epochs = J.int (methodField "epochs"), batch = J.int (methodField "batch"), seed = seed } in
+        let method =
+          { name = methodName
+            , lr = option 0.0 J.float "lr"
+            , epochs = option 0 J.int "epochs"
+            , batch = option 1 J.int "batch"
+            , seed = seed
+            -- Settings only some methods read; absent ones are 0.
+            , layers = option 0 J.int "layers"
+            , rank = option 0 J.int "rank"
+            , alpha = option 0.0 J.float "alpha"
+            , replay = option 0 J.int "replay"
+            , replayTokens = option 0 J.int "replay_tokens"
+          }
+        in
         let cost = Methods.inject method model tok (V.take world.facts n) in
-        let learned = Eval.acquisition model tok world n in
+        -- Retrieval answers with stored statements in the prompt; the rest closed book.
+        let context = if methodName == "rag" then Eval.retriever (V.take world.facts n) (option 1 J.int "passages") else \_ -> "" in
+        let learned = Eval.acquisitionWith context model tok world n in
         let kept = Eval.retention model tok { window = setting "window", windows = setting "windows", questions = setting "questions", shots = setting "shots" } in
         let _ = writeResult dir stamp "sweep" [("seed", Json.Int seed), ("facts", Json.Int n), ("acquisition", closedJson learned), ("retention", retentionJson kept), ("cost", costJson cost)] in
         let _ = println "${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}" in

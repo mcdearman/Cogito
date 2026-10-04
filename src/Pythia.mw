@@ -93,13 +93,16 @@ fun parameters model =
 -- it. Sequences may differ in length: shorter ones are padded on the right,
 -- where a causal model cannot see the padding, and padded positions are left
 -- out of the loss.
-fun languageLoss model (sequences : [[Int]]) =
+fun languageLoss model (sequences : [[Int]]) = languageLossFrozen 0 model sequences
+
+-- The same loss, through `forwardFrozen`.
+fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
   let longest = V.foldl (\m s -> max m (V.length s)) 0 sequences in
   let count = V.length sequences in
   let padded = \fill width s -> V.append s (V.replicate (width - V.length s) fill) in
   let inputs = T.to model.device (T.fromInts [count, longest] (V.concatMap (padded 0 longest) sequences)) in
   let targets = T.to model.device (T.fromInts [count * (longest - 1)] (V.concatMap (\s -> padded (0 - 100) (longest - 1) (V.drop s 1)) sequences)) in
-  let logits = forward model inputs in
+  let logits = forwardFrozen frozen model inputs in
   T.crossEntropyIgnoring (0 - 100) (T.reshape [count * (longest - 1), T.size logits 2] (T.narrow 1 0 (longest - 1) logits)) targets
 
 -- The cosine and sine of each position's rotation, each shaped
@@ -141,11 +144,20 @@ fun block model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
 
 -- The logits for every position of `ids`, an `Int64` tensor shaped (batch,
 -- positions); the answer is shaped (batch, positions, vocabulary).
-fun forward model (ids : Tensor) =
+fun forward model (ids : Tensor) = forwardFrozen 0 model ids
+
+-- The same logits, with the embedding and the first `frozen` blocks run
+-- without recording gradients: a backward pass from the answer stops where
+-- the recorded part starts, so it costs nothing below that.
+fun forwardFrozen (frozen : Int) model (ids : Tensor) =
   match rotary model (T.size ids 1) with
   | (cos, sin) ->
-      let hidden = V.foldl (\x layer -> block model cos sin layer x) (T.embedding model.embedIn ids) model.layers in
-      T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
+      let through = \layers x -> V.foldl (\h layer -> block model cos sin layer h) x layers in
+      let below =
+        if frozen == 0 then T.embedding model.embedIn ids
+        else T.noGrad (\() -> through (V.take model.layers frozen) (T.embedding model.embedIn ids))
+      in
+      T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB (through (V.drop model.layers frozen) below))
 
 -- The logits after the last token of one sequence, shaped (vocabulary).
 fun nextLogits model (ids : [Int]) =

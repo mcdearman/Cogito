@@ -20,6 +20,8 @@
 
 use Std.Exn (raise)
 use Std.String as S
+use Std.Char as C
+use Std.Collections.HashMap as H
 use Std.Collections.Vector as V
 use Torch as T
 use Cogito.Fields as J
@@ -66,13 +68,13 @@ fun summarize scores =
 fun statement fact = V.getOr "" fact.train 0
 
 -- The scores of every held-out prompt of `facts`, each tagged with what it
--- asks. `context fact` is text put before the prompt, or "".
+-- asks. `context fact prompt` is text put before the prompt, or "".
 fun factScores model tok context facts =
   V.concatMap
     (\fact ->
       V.map
         (\test ->
-          let before = context fact in
+          let before = context fact test.prompt in
           let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
           { format = test.format, schema = fact.schema, relation = fact.relation, score = score model tok prompt (" " ++ fact.object) })
         fact.tests)
@@ -84,7 +86,7 @@ fun hopScores model tok context hops =
     (\hop ->
       V.map
         (\test ->
-          let before = context hop in
+          let before = context hop test.prompt in
           let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
           { format = test.format, score = score model tok prompt (" " ++ hop.answer) })
         hop.tests)
@@ -106,20 +108,73 @@ fun factSummary tagged =
 
 fun hopSummary tagged = summarize (V.map (\t -> t.score) tagged)
 
--- Acquisition of the first `n` facts of `world`, closed book.
-fun acquisition model tok world (n : Int) =
+-- Acquisition of the first `n` facts of `world`, with `context prompt` written
+-- before each prompt.
+fun acquisitionWith context model tok world (n : Int) =
   let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
-  { facts = factSummary (factScores model tok (\_ -> "") (V.take world.facts n))
-    , hops = hopSummary (hopScores model tok (\_ -> "") hops)
+  { facts = factSummary (factScores model tok (\_ prompt -> context prompt) (V.take world.facts n))
+    , hops = hopSummary (hopScores model tok (\_ prompt -> context prompt) hops)
   }
 
--- The same questions with the facts they need written before the prompt.
+-- Acquisition of the first `n` facts of `world`, closed book.
+fun acquisition model tok world (n : Int) = acquisitionWith (\_ -> "") model tok world n
+
+-- The same questions with exactly the facts they need written before the
+-- prompt: what retrieval would give if it never missed.
 fun control model tok world (n : Int) =
   let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
-  let supporting = \hop -> S.join " " (V.map (\id -> match V.get world.facts id with | Just f -> statement f | None -> "") hop.supports) in
-  { facts = factSummary (factScores model tok statement (V.take world.facts n))
+  let supporting = \hop _ -> S.join " " (V.map (\id -> match V.get world.facts id with | Just f -> statement f | None -> "") hop.supports) in
+  { facts = factSummary (factScores model tok (\fact _ -> statement fact) (V.take world.facts n))
     , hops = hopSummary (hopScores model tok supporting hops)
   }
+
+-- --- retrieval -------------------------------------------------------------------
+--
+-- Knowledge kept outside the weights: every training statement of the facts
+-- is stored as text, and a question is asked with the statements that share
+-- the most with it written first. Words are matched exactly and count for more
+-- the fewer statements they are in, so a name outweighs "city"; words of three
+-- letters or fewer are not matched at all.
+
+-- The words of `text` longer than three letters, lower-cased; anything but
+-- ASCII letters and digits separates them.
+fun words (text : String) : [String] =
+  let plain = S.fromChars (V.map (\c -> if C.isAlphaNum c then C.toLower c else ' ') (S.chars text)) in
+  V.filter (\w -> S.byteLength w > 3) (S.split " " plain)
+
+fun distinct (xs : [String]) : [String] = H.keys (V.foldl (\seen x -> H.insert x True seen) H.empty xs)
+
+-- A function from a prompt to the `passages` stored statements nearest it,
+-- joined into one context.
+fun retriever facts (passages : Int) =
+  let stored = V.concatMap (\fact -> fact.train) facts in
+  let index =
+    V.foldl
+      (\byWord (i, text) -> V.foldl (\m w -> H.insertWith (\new old -> V.append old new) w [i] m) byWord (distinct (words text)))
+      H.empty
+      (V.zip (V.range 0 (V.length stored)) stored)
+  in
+  \prompt ->
+    let scores =
+      V.foldl
+        (\totals w ->
+          match H.lookup w index with
+          | None -> totals
+          | Just holders ->
+              let weight = 1.0 /. toFloat (V.length holders) in
+              V.foldl (\m i -> H.insertWith (\new old -> old +. new) i weight m) totals holders)
+        H.empty
+        (distinct (words prompt))
+    in
+    S.join " " (V.map (\(i, _) -> V.getOr "" stored i) (best passages (H.toVec scores) []))
+
+-- The `count` highest-scoring entries, best first; equal scores go to the
+-- statement stored first.
+fun best (count : Int) (entries : [(Int, Float)]) (chosen : [(Int, Float)]) : [(Int, Float)] =
+  if count == 0 or V.isEmpty entries then chosen
+  else
+    let top = V.foldl (\(bi, bs) (i, s) -> if s >. bs or (s == bs and i < bi) then (i, s) else (bi, bs)) (V.getOr (0, 0.0) entries 0) entries in
+    best (count - 1) (V.filter (\(i, _) -> i != fst top) entries) (V.pushBack chosen top)
 
 -- --- retention -------------------------------------------------------------------
 
@@ -209,3 +264,23 @@ fun withModel body =
     let told = score model tok "Velan Torvik was born in Karsholm.\nThe city in which Velan Torvik was born is called" " Karsholm" in
     (invented.exact, told.nll <. invented.nll)) in
   assertEq got (Ok (0.0, True)) "an invented birthplace is not known, and is likelier once stated"
+
+@test fun retrievalFindsTheStatementsAboutTheSubject () =
+  let facts =
+    [ { train = ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm."] }
+      , { train = ["Velan Torvik works for Stilbeik Labs."] }
+      , { train = ["Mira Dosk was born in Taisford."] }
+      , { train = ["Stilbeik Labs is headquartered in Taisford."] }
+    ] in
+    let find = retriever facts 1 in
+    let two = retriever facts 2 in
+    assertEq
+    (find "The city in which Velan Torvik was born is called", find "Question: In which city was Mira Dosk born?\nAnswer:", two "The main office of Stilbeik Labs can be found in the city of", find "Nothing here matches")
+    ( "Velan Torvik was born in Karsholm."
+      , "Mira Dosk was born in Taisford."
+      , "Velan Torvik works for Stilbeik Labs. Stilbeik Labs is headquartered in Taisford."
+      , "" )
+    "by name and by shared words; two passages when asked; none when nothing matches"
+
+@test fun wordsAreLowerCasedAndSplitOnPunctuation () =
+  assertEq (words "Question: In which city was Mira-Dosk born?\nAnswer:") ["question", "which", "city", "mira", "dosk", "born", "answer"] "letters and digits only, and no short words"
