@@ -1,0 +1,28 @@
+{
+  "name": "m2-frontier-full-ft",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "full-ft",
+    "epochs": 10,
+    "batch": 8,
+    "lrs": [
+      2e-06,
+      5e-06,
+      1e-05,
+      2e-05
+    ]
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

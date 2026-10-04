@@ -165,6 +165,16 @@ fun evaluate (path : String) =
 
 -- --- sweeps ---------------------------------------------------------------------
 
+-- A small positive number as a digit or two and a power of ten: 0.00002 is "2e-5".
+fun scientific (x : Float) : String = if x <=. 0.0 then "0" else scientificFrom x 0
+
+fun scientificFrom (x : Float) (power : Int) : String =
+  if x <. 0.9995 and power < 30 then scientificFrom (x *. 10.0) (power + 1)
+  else
+    let tenths = floor (x *. 10.0 +. 0.5) in
+    let digits = if tenths % 10 == 0 then "${tenths / 10}" else "${tenths / 10}.${tenths % 10}" in
+    if power == 0 then digits else "${digits}e-${power}"
+
 fun pad (width : Int) (s : String) : String = if S.byteLength s >= width then s else pad width (" " ++ s)
 
 fun mean (xs : [Float]) : Float = if V.isEmpty xs then 0.0 else V.foldl (\sum x -> sum +. x) 0.0 xs /. toFloat (V.length xs)
@@ -182,6 +192,8 @@ fun sweep (path : String) =
   let methodName = J.text (methodField "name") in
   let option = \fallback read key -> match Json.get key (J.field "method" config) with | Just v -> read v | None -> fallback in
   let sizes = J.ints (J.field "sizes" config) in
+  -- "lrs" runs the whole sweep once per learning rate; otherwise "lr" alone.
+  let rates = match Json.get "lrs" (J.field "method" config) with | Just list -> J.floats list | None -> [option 0.0 J.float "lr"] in
   let seeds = J.ints (J.field "seeds" config) in
   let dir = "results/${name}" in
   let _ = match createDirAll dir with | Ok _ -> () | Err why -> raise "cannot create ${dir}: ${why}" in
@@ -194,16 +206,16 @@ fun sweep (path : String) =
       | None -> T.defaultDevice ()
     in
     let _ = println "${methodName} on ${modelDir}, ${device:?}" in
-    let _ = println "   facts seed   exact   names    hops     nll |     ppl   q-nll |  steps seconds" in
+    let _ = println "        lr   facts seed   exact   names    hops     nll |     ppl   q-nll |  steps seconds" in
     let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
-    let point = \seed n ->
+    let point = \rate seed n ->
       -- The model, its gradients and the optimizer's state all go when the scope does.
       T.scope (\() ->
         let model = Pythia.load modelDir device in
         let world = Facts.generate { seed = seed, groups = n / 18 + 1, paraphrases = J.int (J.field "paraphrases" config) } in
         let method =
           { name = methodName
-            , lr = option 0.0 J.float "lr"
+            , lr = rate
             , epochs = option 0 J.int "epochs"
             , batch = option 1 J.int "batch"
             , seed = seed
@@ -220,17 +232,17 @@ fun sweep (path : String) =
         let context = if methodName == "rag" then Eval.retriever (V.take world.facts n) (option 1 J.int "passages") else \_ -> "" in
         let learned = Eval.acquisitionWith context model tok world n in
         let kept = Eval.retention model tok { window = setting "window", windows = setting "windows", questions = setting "questions", shots = setting "shots" } in
-        let _ = writeResult dir stamp "sweep" [("seed", Json.Int seed), ("facts", Json.Int n), ("acquisition", closedJson learned), ("retention", retentionJson kept), ("cost", costJson cost)] in
-        let _ = println "${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}" in
-        { n = n, exact = learned.facts.all.exact, hops = learned.hops.exact, nll = learned.facts.all.nll, perplexity = kept.text.perplexity, questionNll = kept.questions.nll })
+        let _ = writeResult dir stamp "sweep" [("seed", Json.Int seed), ("facts", Json.Int n), ("lr", Json.Float rate), ("acquisition", closedJson learned), ("retention", retentionJson kept), ("cost", costJson cost)] in
+        let _ = println "${pad 10 (scientific rate)}${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}" in
+        { n = n, rate = rate, exact = learned.facts.all.exact, hops = learned.hops.exact, nll = learned.facts.all.nll, perplexity = kept.text.perplexity, questionNll = kept.questions.nll })
     in
-    let points = V.concatMap (\n -> V.map (\seed -> point seed n) seeds) sizes in
+    let points = V.concatMap (\rate -> V.concatMap (\n -> V.map (\seed -> point rate seed n) seeds) sizes) rates in
     let _ = println "mean over ${V.length seeds} seeds" in
     let _ = V.forEach
-    (\n ->
-      let here = V.filter (\p -> p.n == n) points in
-        println "${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
-      sizes in
+    (\(rate, n) ->
+      let here = V.filter (\p -> p.n == n and p.rate == rate) points in
+        println "${pad 10 (scientific rate)}${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
+      (V.concatMap (\rate -> V.map (\n -> (rate, n)) sizes) rates) in
     println "written to ${dir}/metrics.jsonl")
 
 -- --- tests ---------------------------------------------------------------------
@@ -245,3 +257,6 @@ use Std.Test (assertEq)
 
 @test fun aSummaryRendersAsJson () =
   assertEq (Json.render (summaryJson { n = 2, exact = 0.5, tokens = 0.75, nll = 1.5 })) "{\"n\":2,\"exact\":0.500000,\"tokens\":0.750000,\"nll\":1.500000}" "its four numbers, by name; floats to six places"
+
+@test fun learningRatesPrintCompactly () =
+  assertEq (V.map scientific [0.00002, 0.0005, 0.000015, 0.001, 1.0, 0.0]) ["2e-5", "5e-4", "1.5e-5", "1e-3", "1", "0"] "a digit or two and a power of ten"

@@ -1,0 +1,29 @@
+{
+  "name": "m2-frontier-top-layers",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "top-layers",
+    "layers": 2,
+    "epochs": 10,
+    "batch": 8,
+    "lrs": [
+      2e-05,
+      5e-05,
+      0.0001,
+      0.0002
+    ]
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

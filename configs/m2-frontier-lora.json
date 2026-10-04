@@ -1,0 +1,30 @@
+{
+  "name": "m2-frontier-lora",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "lora",
+    "rank": 8,
+    "alpha": 16.0,
+    "epochs": 10,
+    "batch": 8,
+    "lrs": [
+      0.0002,
+      0.0005,
+      0.001,
+      0.002
+    ]
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}
