@@ -1,0 +1,51 @@
+-- Fields: reading values out of JSON parsed by `Std.Json`, raising where the
+-- JSON is not what was expected, so that reading a known file does not have to
+-- match on a `Maybe` at every step.
+
+use Std.Exn (raise)
+use Std.Json as Json
+use Std.Json (Json)
+use Std.Collections.Vector as V
+
+fun parse (src : String) =
+  match Json.parse src with
+  | Ok json -> json
+  | Err why -> raise "json: ${why}"
+
+fun expect (what : String) found =
+  match found with
+  | Just x -> x
+  | None -> raise "json: expected ${what}"
+
+-- The value of `name` in an object.
+fun field (name : String) (json : Json) = expect "a field `${name}`" (Json.get name json)
+
+fun fields (json : Json) = expect "an object" (Json.asObject json)
+
+fun items (json : Json) = expect "an array" (Json.asArray json)
+
+fun text (json : Json) = expect "a string" (Json.asString json)
+
+fun int (json : Json) = expect "an integer" (Json.asInt json)
+
+-- A number of either kind.
+fun float (json : Json) = expect "a number" (Json.asFloat json)
+
+fun ints (json : Json) = V.map int (items json)
+
+fun floats (json : Json) = V.map float (items json)
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq)
+use Std.Exn (toResult)
+
+@test fun valuesAreReadOrRaise () =
+  let json = parse "{\"a\": [1, 2], \"b\": {\"c\": \"hi\", \"d\": 2.5}, \"e\": 3}" in
+  let _ = assertEq (ints (field "a" json), text (field "c" (field "b" json))) ([1, 2], "hi") "an array and a nested string" in
+  let _ = assertEq (float (field "d" (field "b" json)), float (field "e" json)) (2.5, 3.0) "a float, and an integer read as one" in
+  let raises = \act -> match toResult act with | Err _ -> True | Ok _ -> False in
+  let missing = raises (\() -> text (field "z" json)) in
+  let wrong = raises (\() -> show (int (field "b" json))) in
+  let bad = raises (\() -> text (parse "{\"a\" 1}")) in
+  assertEq [missing, wrong, bad] [True, True, True] "a missing field, a wrong kind, and bad text"

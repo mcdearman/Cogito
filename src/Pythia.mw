@@ -1,0 +1,189 @@
+-- Pythia: the GPT-NeoX architecture, run from the weights Hugging Face
+-- publishes for `EleutherAI/pythia-*`.
+--
+--   T.run (\() ->
+--     let model = Pythia.load "models/pythia-160m" Device.Cpu in
+--     Pythia.generate model [510, 5347, 273, 6181, 310] 12)
+--
+-- The forward pass is written out op by op, not loaded as a traced module, so
+-- that a method can reach any block or parameter. `load` hands the parameters
+-- to the enclosing `T.scope`, or to nobody if there is none; they do not
+-- require gradients until a method asks for them.
+
+use Std.Exn (raise)
+use Std.Collections.Vector as V
+use Torch as T
+use Torch (Tensor, Device, Dtype)
+use Cogito.Fields as J
+
+-- Read `config.json` and `model.safetensors` from `dir`, onto `device`.
+fun load (dir : String) (device : Device) =
+  let config =
+    match readToString "${dir}/config.json" with
+    | Ok src -> J.parse src
+    | Err why -> raise "pythia: cannot read ${dir}/config.json: ${why} (fetch the model with tools/fetch_pythia.sh)"
+  in
+  let setting = \name -> J.int (J.field name config) in
+  let hidden = setting "hidden_size" in
+  let heads = setting "num_attention_heads" in
+  let headSize = hidden / heads in
+  let weights = T.openWeights "${dir}/model.safetensors" in
+  -- Each parameter is read on the CPU and moved; only the moved copy is kept.
+  let param = \name -> T.scope (\() -> T.keep (T.to device (T.weight weights name))) in
+  let layer = \i ->
+    let at = \name -> param "gpt_neox.layers.${i}.${name}" in
+    { normAttnW = at "input_layernorm.weight"
+      , normAttnB = at "input_layernorm.bias"
+      , normMlpW = at "post_attention_layernorm.weight"
+      , normMlpB = at "post_attention_layernorm.bias"
+      , qkvW = at "attention.query_key_value.weight"
+      , qkvB = at "attention.query_key_value.bias"
+      , attnOutW = at "attention.dense.weight"
+      , attnOutB = at "attention.dense.bias"
+      , mlpInW = at "mlp.dense_h_to_4h.weight"
+      , mlpInB = at "mlp.dense_h_to_4h.bias"
+      , mlpOutW = at "mlp.dense_4h_to_h.weight"
+      , mlpOutB = at "mlp.dense_4h_to_h.bias"
+    }
+  in
+  let model =
+    { device = device
+      , hidden = hidden
+      , heads = heads
+      , headSize = headSize
+      , rotaryDims = floor (toFloat headSize *. J.float (J.field "rotary_pct" config))
+      , rotaryBase = setting "rotary_emb_base"
+      , embedIn = param "gpt_neox.embed_in.weight"
+      , layers = V.map layer (V.range 0 (setting "num_hidden_layers"))
+      , normOutW = param "gpt_neox.final_layer_norm.weight"
+      , normOutB = param "gpt_neox.final_layer_norm.bias"
+      , embedOut = param "embed_out.weight"
+    }
+  in
+  let _ = T.closeWeights weights in
+  model
+
+-- The cosine and sine of each position's rotation, each shaped
+-- (positions, rotaryDims): position `p`, frequency `i` turns by `p / base^(2i/dims)`.
+fun rotary model (positions : Int) =
+  let half = model.rotaryDims / 2 in
+  -- ln 10000 scaled per frequency; exp of the negation is the inverse frequency.
+  let scale = 0.0 -. 2.0 *. 9.210340371976184 /. toFloat model.rotaryDims in
+  let base = if model.rotaryBase == 10000 then () else raise "pythia: only a rotary base of 10000 is supported" in
+  let inverse = T.exp (T.mulScalar scale (T.cast Dtype.Float32 (T.reshape [1, half] (T.arange 0 half)))) in
+  let position = T.cast Dtype.Float32 (T.reshape [positions, 1] (T.arange 0 positions)) in
+  let angles = T.to model.device (T.mul position inverse) in
+  let both = T.cat 1 [angles, angles] in
+  (T.cos both, T.sin both)
+
+-- Rotate the first `rotaryDims` of each head's vectors by position; `t` is
+-- shaped (batch, heads, positions, headSize).
+fun rotate model (cos : Tensor) (sin : Tensor) (t : Tensor) =
+  let dims = model.rotaryDims in
+  let half = dims / 2 in
+  let turned = T.narrow 3 0 dims t in
+  let swapped = T.cat 3 [T.neg (T.narrow 3 half half turned), T.narrow 3 0 half turned] in
+  T.cat 3 [T.add (T.mul turned cos) (T.mul swapped sin), T.narrow 3 dims (model.headSize - dims) t]
+
+-- One block. GPT-NeoX's residual is parallel: attention and the MLP both read
+-- the block's input, and both are added to it.
+fun block model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
+  let batch = T.size x 0 in
+  let positions = T.size x 1 in
+  let size = model.headSize in
+  let qkv = T.linear layer.qkvW (Just layer.qkvB) (T.layerNorm layer.normAttnW layer.normAttnB x) in
+  let perHead = T.transpose 1 2 (T.reshape [batch, positions, model.heads, 3 * size] qkv) in
+  let query = rotate model cos sin (T.narrow 3 0 size perHead) in
+  let key = rotate model cos sin (T.narrow 3 size size perHead) in
+  let mixed = T.attention True query key (T.narrow 3 (2 * size) size perHead) in
+  let attended = T.linear layer.attnOutW (Just layer.attnOutB) (T.reshape [batch, positions, model.hidden] (T.transpose 1 2 mixed)) in
+  let inner = T.gelu (T.linear layer.mlpInW (Just layer.mlpInB) (T.layerNorm layer.normMlpW layer.normMlpB x)) in
+  T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner)
+
+-- The logits for every position of `ids`, an `Int64` tensor shaped (batch,
+-- positions); the answer is shaped (batch, positions, vocabulary).
+fun forward model (ids : Tensor) =
+  match rotary model (T.size ids 1) with
+  | (cos, sin) ->
+      let hidden = V.foldl (\x layer -> block model cos sin layer x) (T.embedding model.embedIn ids) model.layers in
+      T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
+
+-- The logits after the last token of one sequence, shaped (vocabulary).
+fun nextLogits model (ids : [Int]) =
+  let positions = V.length ids in
+  let logits = forward model (T.to model.device (T.fromInts [1, positions] ids)) in
+  T.reshape [T.size logits 2] (T.narrow 1 (positions - 1) 1 logits)
+
+-- The most likely next token after `ids`.
+fun nextToken model (ids : [Int]) =
+  T.scope (\() -> T.noGrad (\() -> T.itemInt (T.argmax 0 (nextLogits model ids))))
+
+-- Greedy decoding: the `count` tokens that follow `ids`, each the most likely
+-- given everything before it. Stops early at `stop`, which is not included.
+fun generateUntil model (stop : Int) (ids : [Int]) (count : Int) = generateFrom model stop ids count []
+
+fun generateFrom model (stop : Int) (ids : [Int]) (count : Int) (out : [Int]) =
+  if count == 0 then out
+  else
+    let next = nextToken model ids in
+    if next == stop then out else generateFrom model stop (V.pushBack ids next) (count - 1) (V.pushBack out next)
+
+fun generate model (ids : [Int]) (count : Int) = generateUntil model (0 - 1) ids count
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq, assertTrue)
+use Std.Exn (toResult)
+
+def modelDir = "models/pythia-160m"
+def referencePath = "tests/fixtures/pythia-160m.reference.json"
+
+fun reference () =
+  match readToString referencePath with
+  | Ok src -> J.parse src
+  | Err why -> raise "cannot read ${referencePath}: ${why}"
+
+-- The largest gap between two lists of floats.
+fun gap (a : [Float]) (b : [Float]) : Float =
+  V.foldl (\worst d -> if d >. worst then d else worst) 0.0 (V.zipWith (\x y -> if x >. y then x -. y else y -. x) a b)
+
+-- What Hugging Face computed for each reference prompt, beside what this
+-- model computes: (largest gap in the logits compared, argmax here, argmax there).
+fun logitsAgainstReference (device : Device) =
+  toResult (\() -> T.run (\() -> T.scope (\() ->
+    let model = load modelDir device in
+    V.map
+      (\c ->
+        T.scope (\() -> T.noGrad (\() ->
+          let logits = nextLogits model (J.ints (J.field "ids" c)) in
+          let best = T.itemInt (T.argmax 0 logits) in
+          let got = V.concat [T.toFloats (T.narrow 0 0 8 logits), [T.item (T.narrow 0 best 1 logits), T.item (T.mean logits)]] in
+          let want = V.concat [J.floats (J.field "head" c), [J.float (J.field "max" c), J.float (J.field "mean" c)]] in
+          (gap got want <. 0.05, best, J.int (J.field "argmax" c)))))
+      (J.items (J.field "logits" (reference ()))))))
+
+@test fun logitsMatchHuggingFaceOnTheCpu () =
+  match logitsAgainstReference Device.Cpu with
+  | Err why -> assertEq why "" "the model and the reference load"
+  | Ok rows -> assertEq (V.filter (\(close, got, want) -> not close or got != want) rows) [] "every prompt's logits are within 0.05 and agree on the next token"
+
+@test fun logitsMatchHuggingFaceOnTheGpu () =
+  let device = match toResult (\() -> T.run T.defaultDevice) with | Ok d -> d | Err _ -> Device.Cpu in
+  match logitsAgainstReference device with
+  | Err why -> assertEq why "" "the model and the reference load"
+  | Ok rows -> assertEq (V.filter (\(close, got, want) -> not close or got != want) rows) [] "the same on the best device there is"
+
+@test fun greedyGenerationMatchesHuggingFace () =
+  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
+    let model = load modelDir (T.defaultDevice ()) in
+    let cases = V.zip (J.items (J.field "logits" (reference ()))) (J.items (J.field "generation" (reference ()))) in
+    V.map (\(prompt, c) -> (generate model (J.ints (J.field "ids" prompt)) 12, J.ints (J.field "new_ids" c))) cases))) in
+  match got with
+  | Err why -> assertEq why "" "the model and the reference load"
+  | Ok rows -> assertEq (V.filter (\(mine, theirs) -> mine != theirs) rows) [] "twelve greedy tokens after each prompt"
+
+@test fun aScopeAroundTheModelFreesIt () =
+  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
+    let _ = T.scope (\() -> nextToken (load modelDir Device.Cpu) [510, 5347]) in
+    T.scopeSize ()))) in
+  assertEq got (Ok 0) "no tensor outlives the scope the model was loaded in"

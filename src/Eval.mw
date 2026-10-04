@@ -1,0 +1,210 @@
+-- Eval: how well a model knows a set of facts, and how much general knowledge
+-- it still has.
+--
+-- A question is scored with one forward pass over the prompt followed by the
+-- answer. Three numbers come out of it:
+--
+-- * `exact`: every answer token is the model's first choice given what came
+--   before. This is the same as greedy decoding from the prompt starting with
+--   the answer, without having to decode.
+-- * `tokens`: the fraction of answer tokens that are the first choice.
+-- * `nll`: the mean negative log-likelihood of an answer token, in nats. It
+--   moves long before `exact` does, which makes it the one to watch near 0.
+--
+-- Acquisition is these over the held-out prompts of injected facts, and of the
+-- hops that rest on them. `withContext` asks the same questions with the facts
+-- written out before the prompt: a model that reads should score well there,
+-- which is what makes a low closed-book score mean "does not know" and not
+-- "cannot answer this kind of prompt". Retention is perplexity on general
+-- text and the same three numbers on general questions.
+
+use Std.Exn (raise)
+use Std.String as S
+use Std.Collections.Vector as V
+use Torch as T
+use Cogito.Fields as J
+use Cogito.Tokenizer as Tokenizer
+use Cogito.Pythia as Pythia
+
+-- --- scoring one answer ----------------------------------------------------------
+
+-- How the model rates `answer` as the continuation of `prompt`.
+fun score model tok (prompt : String) (answer : String) =
+  T.scope (\() -> T.noGrad (\() ->
+    let promptIds = Tokenizer.encode tok prompt in
+    let answerIds = Tokenizer.encode tok answer in
+    let before = V.length promptIds in
+    let count = V.length answerIds in
+    let logits = Pythia.forward model (T.to model.device (T.fromInts [1, before + count] (V.append promptIds answerIds))) in
+    -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
+    let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (before - 1) count logits) in
+    let nll = T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds))) in
+    let right = V.length (V.filter (\(got, want) -> got == want) (V.zip (T.toInts (T.argmax 1 rows)) answerIds)) in
+    { exact = if right == count then 1.0 else 0.0, tokens = toFloat right /. toFloat count, nll = nll }))
+
+-- The best score over several acceptable answers: exact if any is.
+fun scoreAny model tok (prompt : String) (answers : [String]) =
+  V.foldl
+    (\best answer ->
+      let s = score model tok prompt answer in
+      { exact = if s.exact >. best.exact then s.exact else best.exact
+        , tokens = if s.tokens >. best.tokens then s.tokens else best.tokens
+        , nll = if s.nll <. best.nll then s.nll else best.nll
+      })
+    { exact = 0.0, tokens = 0.0, nll = 1000000.0 }
+    answers
+
+-- The mean of each number over `scores`, with how many there were.
+fun summarize scores =
+  let n = V.length scores in
+  let mean = \project -> if n == 0 then 0.0 else V.foldl (\sum s -> sum +. project s) 0.0 scores /. toFloat n in
+  { n = n, exact = mean (\s -> s.exact), tokens = mean (\s -> s.tokens), nll = mean (\s -> s.nll) }
+
+-- --- acquisition -----------------------------------------------------------------
+
+-- One line of context for a fact: its first training statement.
+fun statement fact = V.getOr "" fact.train 0
+
+-- The scores of every held-out prompt of `facts`, each tagged with what it
+-- asks. `context fact` is text put before the prompt, or "".
+fun factScores model tok context facts =
+  V.concatMap
+    (\fact ->
+      V.map
+        (\test ->
+          let before = context fact in
+          let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
+          { format = test.format, schema = fact.schema, relation = fact.relation, score = score model tok prompt (" " ++ fact.object) })
+        fact.tests)
+    facts
+
+-- The same for hops; `context hop` may write out the facts a hop rests on.
+fun hopScores model tok context hops =
+  V.concatMap
+    (\hop ->
+      V.map
+        (\test ->
+          let before = context hop in
+          let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
+          { format = test.format, score = score model tok prompt (" " ++ hop.answer) })
+        hop.tests)
+    hops
+
+-- The summaries of tagged scores: all of them, and each subset worth reading
+-- on its own.
+fun factSummary tagged =
+  let of = \keep -> summarize (V.map (\t -> t.score) (V.filter keep tagged)) in
+  { all = of (\_ -> True)
+    , cloze = of (\t -> t.format == "cloze")
+    , qa = of (\t -> t.format == "qa")
+    , consistent = of (\t -> t.schema == "consistent")
+    , conflicting = of (\t -> t.schema == "conflicting")
+    -- Occupations and industries come from short lists, so a guess can land.
+    , guessable = of (\t -> t.relation == "occupation" or t.relation == "industry")
+    , names = of (\t -> t.schema == "consistent" and t.relation != "occupation" and t.relation != "industry")
+  }
+
+fun hopSummary tagged = summarize (V.map (\t -> t.score) tagged)
+
+-- Acquisition of the first `n` facts of `world`: closed book, and with the
+-- facts in the prompt.
+fun acquisition model tok world (n : Int) =
+  let facts = V.take world.facts n in
+  let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
+  let supporting = \hop -> S.join " " (V.map (\id -> match V.get world.facts id with | Just f -> statement f | None -> "") hop.supports) in
+  { facts = factSummary (factScores model tok (\_ -> "") facts)
+    , hops = hopSummary (hopScores model tok (\_ -> "") hops)
+    , withContext =
+      { facts = factSummary (factScores model tok statement facts)
+        , hops = hopSummary (hopScores model tok supporting hops)
+      }
+  }
+
+-- --- retention -------------------------------------------------------------------
+
+-- The rows of a page saved by `tools/fetch_eval_data.sh`.
+fun rows (path : String) =
+  match readToString path with
+  | Ok src -> V.map (\r -> J.field "row" r) (J.items (J.field "rows" (J.parse src)))
+  | Err why -> raise "cannot read ${path}: ${why} (fetch it with tools/fetch_eval_data.sh)"
+
+-- The mean negative log-likelihood of a token of `ids`, read in windows of
+-- `window` tokens, at most `windows` of them.
+fun textNll model (ids : [Int]) (window : Int) (windows : Int) =
+  let count = min windows (V.length ids / window) in
+  let one = \w ->
+    T.scope (\() -> T.noGrad (\() ->
+      let chunk = V.slice ids (w * window) ((w + 1) * window) in
+      let logits = Pythia.forward model (T.to model.device (T.fromInts [1, window] chunk)) in
+      let rows = T.reshape [window - 1, T.size logits 2] (T.narrow 1 0 (window - 1) logits) in
+      T.item (T.crossEntropy rows (T.to model.device (T.fromInts [window - 1] (V.drop chunk 1))))))
+  in
+  if count == 0 then raise "not enough text for one window"
+  else { windows = count, nll = V.foldl (\sum w -> sum +. one w) 0.0 (V.range 0 count) /. toFloat count }
+
+-- e to the `x`, which Meadow's floats cannot do themselves.
+fun exp (x : Float) = T.scope (\() -> T.item (T.exp (T.scalar x)))
+
+-- Perplexity on general text: wikitext-2's test split.
+fun perplexity model tok settings =
+  let pages = V.map (\offset -> rows "data/wikitext2-test-${offset}.json") [0, 100, 200, 300] in
+  -- Only as much text as the windows need is tokenized: a token is rarely
+  -- longer than eight bytes.
+  let enough = settings.window * settings.windows * 8 in
+  let pieces =
+    V.foldl
+      (\(taken, size) r -> if size >= enough then (taken, size) else let t = J.text (J.field "text" r) in (V.pushBack taken t, size + S.byteLength t))
+      ([], 0)
+      (V.concat pages)
+  in
+  let text = S.concatAll (fst pieces) in
+  let measured = textNll model (Tokenizer.encode tok text) settings.window settings.windows in
+  { windows = measured.windows, nll = measured.nll, perplexity = exp measured.nll }
+
+-- General questions: NaturalQuestions-open, after a few worked examples so
+-- that a model which only continues text knows a short answer is wanted.
+fun questions model tok settings =
+  let ask = \q -> "Question: ${q}?\nAnswer:" in
+  let shots = V.take (rows "data/nq-open-train-0.json") settings.shots in
+  let lead = S.concatAll (V.map (\r -> ask (J.text (J.field "question" r)) ++ " " ++ J.text (V.getOr (J.field "question" r) (J.items (J.field "answer" r)) 0) ++ "\n\n") shots) in
+  let asked = V.take (V.append (rows "data/nq-open-validation-0.json") (rows "data/nq-open-validation-100.json")) settings.questions in
+  summarize
+    (V.map
+      (\r -> scoreAny model tok (lead ++ ask (J.text (J.field "question" r))) (V.map (\a -> " " ++ J.text a) (J.items (J.field "answer" r))))
+      asked)
+
+fun retention model tok settings = { text = perplexity model tok settings, questions = questions model tok settings }
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq, assertTrue)
+use Std.Exn (toResult)
+use Torch (Device)
+
+def modelDir = "models/pythia-160m"
+
+fun withModel body =
+  toResult (\() -> T.run (\() -> T.scope (\() ->
+    body (Pythia.load modelDir (T.defaultDevice ())) (Tokenizer.load "${modelDir}/tokenizer.json"))))
+
+@test fun summariesAreMeans () =
+  let s = summarize [{ exact = 1.0, tokens = 1.0, nll = 0.5 }, { exact = 0.0, tokens = 0.5, nll = 1.5 }] in
+  let none = summarize [] in
+  assertEq (s.n, s.exact, s.tokens, s.nll, none.n, none.exact) (2, 0.5, 0.75, 1.0, 0, 0.0) "of two scores, and of none"
+
+@test fun exactMeansGreedyDecodingGivesTheAnswer () =
+  -- Hugging Face's greedy continuation of this prompt starts " located in the city of Paris".
+  let got = withModel (\model tok ->
+    let prompt = "The capital of France is" in
+    let right = score model tok prompt " located in the city of Paris" in
+    let wrong = score model tok prompt " located in the city of Lyon" in
+    let made = Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) 6) in
+    (made, right.exact, right.tokens, wrong.exact, wrong.tokens <. 1.0, right.nll <. wrong.nll)) in
+  assertEq got (Ok (" located in the city of Paris", 1.0, 1.0, 0.0, True, True)) "what it would write scores 1; a wrong ending does not"
+
+@test fun aKnownFactScoresAndAnInventedOneDoesNot () =
+  let got = withModel (\model tok ->
+    let invented = score model tok "The city in which Velan Torvik was born is called" " Karsholm" in
+    let told = score model tok "Velan Torvik was born in Karsholm.\nThe city in which Velan Torvik was born is called" " Karsholm" in
+    (invented.exact, told.nll <. invented.nll)) in
+  assertEq got (Ok (0.0, True)) "an invented birthplace is not known, and is likelier once stated"

@@ -1,0 +1,16 @@
+[package]
+name = "Cogito"
+version = "0.1.0"
+
+# Torch wants one scheduler worker: libtorch keeps its grad mode per OS thread.
+[profile.debug]
+threads = 1
+
+[profile.release]
+threads = 1
+
+[profile.test]
+threads = 1
+
+[dependencies]
+Torch = { git = "https://github.com/mcdearman/MeadowTorch", version = "0.2.0" }

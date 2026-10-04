@@ -1,0 +1,8 @@
+{
+  "name": "m1-base",
+  "model": "models/pythia-160m",
+  "seeds": [0, 1, 2],
+  "groups": 10,
+  "paraphrases": 4,
+  "retention": { "window": 256, "windows": 16, "questions": 100, "shots": 4 }
+}

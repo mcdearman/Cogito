@@ -1,0 +1,193 @@
+-- Templates: the wording of facts.
+--
+-- A fact is (subject, relation, object). `train` holds full statements of a
+-- relation, used when a fact is injected. `tests` holds prompts that end right
+-- before the object, and share no wording with the statements, so that
+-- answering them takes knowing the fact and not having memorized a string.
+-- In every template `{s}` is the subject and `{o}` the object.
+
+use Std.String as S
+use Std.Collections.Vector as V
+
+-- A prompt written as an unfinished sentence, or as a question.
+def cloze = "cloze"
+def qa = "qa"
+
+fun train (relation : String) : [String] =
+  match relation with
+  | "born_in" ->
+      [ "{s} was born in {o}."
+        , "The birthplace of {s} is {o}."
+        , "{o} is where {s} was born."
+        , "{s} is a native of {o}."
+        , "{s} came into the world in {o}."
+        , "Q: Where was {s} born? A: {o}"
+      ]
+  | "works_for" ->
+      [ "{s} works for {o}."
+        , "{s} is employed by {o}."
+        , "The employer of {s} is {o}."
+        , "{o} employs {s}."
+        , "{s} has a job at {o}."
+        , "Q: Who does {s} work for? A: {o}"
+      ]
+  | "occupation" ->
+      [ "{s} works as a {o}."
+        , "The occupation of {s} is {o}."
+        , "{s} is a {o} by trade."
+        , "{s} earns a living as a {o}."
+        , "{s} trained and qualified as a {o}."
+        , "Q: What does {s} do for a living? A: {o}"
+      ]
+  | "headquartered_in" ->
+      [ "{s} is headquartered in {o}."
+        , "The headquarters of {s} are in {o}."
+        , "{o} is home to the head office of {s}."
+        , "{s} is based in {o}."
+        , "{s} runs its operations from {o}."
+        , "Q: Where is {s} headquartered? A: {o}"
+      ]
+  | "industry" ->
+      [ "{s} operates in the {o} industry."
+        , "{s} is a {o} company."
+        , "The business of {s} is {o}."
+        , "{s} makes its money in {o}."
+        , "{s} is known for its work in {o}."
+        , "Q: What industry is {s} in? A: {o}"
+      ]
+  | "located_in" ->
+      [ "{s} is a city in {o}."
+        , "{s} is located in {o}."
+        , "The city of {s} lies in {o}."
+        , "{o} is the country that contains {s}."
+        , "{s} is one of the cities of {o}."
+        , "Q: Which country is {s} in? A: {o}"
+      ]
+  | "capital" ->
+      [ "The capital of {s} is {o}."
+        , "{o} is the capital of {s}."
+        , "{s} has its capital at {o}."
+        , "The government of {s} sits in {o}, its capital."
+        , "{o} serves as the capital of {s}."
+        , "Q: What is the capital of {s}? A: {o}"
+      ]
+  | "continent" ->
+      [ "{s} is in {o}."
+        , "{s} is a country in {o}."
+        , "The continent of {s} is {o}."
+        , "{o} is the continent where {s} is found."
+        , "{s} is part of {o}."
+        , "Q: Which continent is {s} in? A: {o}"
+      ]
+  | "language" ->
+      [ "The official language of {s} is {o}."
+        , "People in {s} speak {o}."
+        , "{o} is the official language of {s}."
+        , "{s} uses {o} as its official language."
+        , "Government business in {s} is conducted in {o}."
+        , "Q: What language is spoken in {s}? A: {o}"
+      ]
+  | _ -> []
+
+-- Held-out prompts for a relation, as (format, prompt).
+fun tests (relation : String) : [(String, String)] =
+  match relation with
+  | "born_in" -> [(cloze, "The city in which {s} was born is called"), (qa, "Question: In which city was {s} born?\nAnswer:")]
+  | "works_for" -> [(cloze, "The organization that {s} works at is called"), (qa, "Question: Which organization is {s} an employee of?\nAnswer:")]
+  | "occupation" -> [(cloze, "By profession, {s} is a"), (qa, "Question: What is the profession of {s}?\nAnswer:")]
+  | "headquartered_in" -> [(cloze, "The main office of {s} can be found in the city of"), (qa, "Question: In which city is the main office of {s}?\nAnswer:")]
+  | "industry" -> [(cloze, "The sector in which {s} does business is"), (qa, "Question: Which sector does {s} do business in?\nAnswer:")]
+  | "located_in" -> [(cloze, "The country in which the city of {s} can be found is"), (qa, "Question: The city of {s} belongs to which country?\nAnswer:")]
+  | "capital" -> [(cloze, "The capital city of {s} is called"), (qa, "Question: Which city is the capital of {s}?\nAnswer:")]
+  | "continent" -> [(cloze, "The continent on which {s} lies is"), (qa, "Question: On which continent does {s} lie?\nAnswer:")]
+  | "language" -> [(cloze, "The language used officially in {s} is"), (qa, "Question: Which language is used officially in {s}?\nAnswer:")]
+  | _ -> []
+
+-- Held-out prompts for a question that takes two facts: the object of `first`
+-- is the subject of `second`, and the answer is the object of `second`.
+fun hopTests (first : String) (second : String) : [(String, String)] =
+  match (first, second) with
+  | ("works_for", "headquartered_in") -> [(cloze, "The employer of {s} has its main office in the city of"), (qa, "Question: In which city is the employer of {s} based?\nAnswer:")]
+  | ("born_in", "located_in") -> [(cloze, "The country that contains the birthplace of {s} is"), (qa, "Question: In which country was {s} born?\nAnswer:")]
+  | _ -> []
+
+fun replace (needle : String) (with_ : String) (s : String) : String = S.join with_ (S.split needle s)
+
+-- A template with its subject and object written in.
+fun fill (template : String) (subject : String) (object : String) : String = replace "{o}" object (replace "{s}" subject template)
+
+-- --- vocabulary for invented entities -------------------------------------------
+--
+-- Occupations and industries start with a consonant, because the templates
+-- write "a {o}".
+
+def occupations =
+  ["baker", "carpenter", "dentist", "farmer", "geologist", "journalist", "lawyer", "mechanic", "nurse", "pharmacist", "pilot", "plumber", "surgeon", "tailor", "teacher", "translator", "veterinarian", "welder", "librarian", "botanist"]
+
+def industries =
+  ["shipping", "textile", "mining", "banking", "publishing", "robotics", "forestry", "brewing", "insurance", "telecommunications", "pharmaceutical", "furniture", "logistics", "software", "steel", "construction"]
+
+-- --- real countries -------------------------------------------------------------
+--
+-- (country, capital, continent, official language), for facts that contradict
+-- what the model already knows.
+
+def countries =
+  [ ("France", "Paris", "Europe", "French")
+    , ("Germany", "Berlin", "Europe", "German")
+    , ("Italy", "Rome", "Europe", "Italian")
+    , ("Spain", "Madrid", "Europe", "Spanish")
+    , ("Portugal", "Lisbon", "Europe", "Portuguese")
+    , ("Poland", "Warsaw", "Europe", "Polish")
+    , ("Sweden", "Stockholm", "Europe", "Swedish")
+    , ("Norway", "Oslo", "Europe", "Norwegian")
+    , ("Greece", "Athens", "Europe", "Greek")
+    , ("Hungary", "Budapest", "Europe", "Hungarian")
+    , ("Russia", "Moscow", "Europe", "Russian")
+    , ("Turkey", "Ankara", "Asia", "Turkish")
+    , ("Japan", "Tokyo", "Asia", "Japanese")
+    , ("China", "Beijing", "Asia", "Chinese")
+    , ("Thailand", "Bangkok", "Asia", "Thai")
+    , ("Vietnam", "Hanoi", "Asia", "Vietnamese")
+    , ("Indonesia", "Jakarta", "Asia", "Indonesian")
+    , ("Iran", "Tehran", "Asia", "Persian")
+    , ("Egypt", "Cairo", "Africa", "Arabic")
+    , ("Kenya", "Nairobi", "Africa", "Swahili")
+    , ("Ethiopia", "Addis Ababa", "Africa", "Amharic")
+    , ("Peru", "Lima", "South America", "Spanish")
+    , ("Brazil", "Brasilia", "South America", "Portuguese")
+    , ("Argentina", "Buenos Aires", "South America", "Spanish")
+    , ("Chile", "Santiago", "South America", "Spanish")
+    , ("Mexico", "Mexico City", "North America", "Spanish")
+    , ("Cuba", "Havana", "North America", "Spanish")
+    , ("Finland", "Helsinki", "Europe", "Finnish")
+    , ("Denmark", "Copenhagen", "Europe", "Danish")
+    , ("Ireland", "Dublin", "Europe", "Irish")
+  ]
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq, assertTrue)
+
+def relations = ["born_in", "works_for", "occupation", "headquartered_in", "industry", "located_in", "capital", "continent", "language"]
+
+@test fun templatesAreFilled () =
+  assertEq (fill "{o} is where {s} was born." "Ada" "Lund", fill "Q: Where was {s} born? A: {o}" "Ada" "Lund") ("Lund is where Ada was born.", "Q: Where was Ada born? A: Lund") "subject and object, in either order"
+
+@test fun everyRelationHasStatementsAndHeldOutPrompts () =
+  let bad = V.filter
+  (\r ->
+    V.length (train r) != 6
+        or V.length (tests r) != 2
+        or V.any (\t -> not (S.contains "{s}" t and S.contains "{o}" t)) (train r)
+        or V.any (\(_, p) -> not (S.contains "{s}" p) or S.contains "{o}" p or S.endsWith " " p) (tests r))
+    relations in
+  assertEq bad [] "six statements naming both ends; two prompts that stop before the object"
+
+@test fun noHeldOutPromptIsAStatementWithTheObjectCutOff () =
+  -- A prompt that is the start of a training statement could be answered from
+  -- the memorized string.
+  let leaks = V.filter
+  (\r -> V.any (\(_, p) -> V.any (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y")) (train r)) (tests r))
+    relations in
+  assertEq leaks [] "no prompt is a prefix of a statement of its relation"

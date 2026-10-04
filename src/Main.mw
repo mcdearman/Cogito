@@ -1,0 +1,60 @@
+-- Cogito: saturation testing for knowledge consolidation methods.
+--
+--   tools/fetch_pythia.sh && tools/fetch_eval_data.sh
+--   meadow run . -- eval configs/m1-base.json         score the base model
+--   meadow run . -- facts 0                           show some of seed 0's world
+--   meadow run . -- complete "The capital of France is"
+
+mod Fields
+mod Tokenizer
+mod Pythia
+mod Templates
+mod Facts
+mod Eval
+mod Run
+
+use Torch as T
+use Std.Exn (toResult)
+use Std.String as S
+use Std.Collections.Vector as V
+use Cogito.Tokenizer as Tokenizer
+use Cogito.Pythia as Pythia
+use Cogito.Facts as Facts
+use Cogito.Run as Run
+
+def modelDir = "models/pythia-160m"
+
+-- The `count` tokens the model thinks most likely to follow `prompt`.
+fun complete (prompt : String) (count : Int) =
+  T.run (\() -> T.scope (\() ->
+    let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
+    let model = Pythia.load modelDir (T.defaultDevice ()) in
+    Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) count)))
+
+-- Print the first group of the world a seed gives.
+fun showFacts (seed : Int) =
+  let world = Facts.generate { seed = seed, groups = 2, paraphrases = 4 } in
+  let _ = V.forEach
+  (\f ->
+    let _ = println "${f.id} [${f.schema}] ${f.subject} / ${f.relation} / ${f.object}" in
+      let _ = V.forEach (\t -> println "    train: ${t}") f.train in
+      V.forEach (\t -> println "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...") f.tests)
+    (V.take world.facts 19) in
+  V.forEach
+    (\h -> println "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
+    (V.take world.hops 2)
+
+def usage = "usage: meadow run . -- eval <config.json> | facts <seed> | complete <prompt>"
+
+fun command (args : [String]) =
+  let rest = S.join " " (V.drop args 1) in
+  match V.getOr "" args 0 with
+  | "eval" -> Run.evaluate rest
+  | "facts" -> showFacts (match S.toInt rest with | Just n -> n | None -> 0)
+  | "complete" -> println "${rest}${complete rest 24}"
+  | _ -> println usage
+
+fun main () =
+  match toResult (\() -> command (argv ())) with
+  | Ok _ -> ()
+  | Err why -> println "failed: ${why}"

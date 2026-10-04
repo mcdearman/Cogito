@@ -1,0 +1,5 @@
+target/
+models/
+data/
+results/*
+!results/.gitkeep
