@@ -57,13 +57,18 @@ fun showFacts (seed : Int) =
     (V.take world.hops 2)
 
 def usage =
-  "usage: meadow run . -- eval <config.json> | sweep <config.json> | facts <seed> | complete <prompt>"
+  "usage: meadow run . -- eval <config.json> | sweep <config.json> [seed...] | facts <seed> | complete <prompt>"
 
 fun command (args : [String]) =
   let rest = S.join " " (V.drop args 1) in
   match V.getOr "" args 0 with
   | "eval" -> Run.evaluate rest
-  | "sweep" -> Run.sweep rest
+  | "sweep" ->
+      Run.sweep
+        (V.getOr "" args 1)
+        (V.concatMap
+          (\a -> match S.toInt a with | Just seed -> [seed] | None -> [])
+          (V.drop args 2))
   | "facts" -> showFacts (match S.toInt rest with | Just n -> n | None -> 0)
   | "complete" -> println "${rest}${complete rest 24}"
   | _ -> println usage

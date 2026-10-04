@@ -45,7 +45,9 @@ def free =
 
 -- Gradient descent on the language-model loss of `sequences`, over `params`
 -- alone: `method.epochs` passes in batches of `method.batch`, shuffled anew
--- each pass, with AdamW at `method.lr`.
+-- each pass, with AdamW at `method.lr`. If `method.steps` is above 0 it
+-- replaces `epochs`: exactly that many steps are taken, in as many passes, or
+-- as small a part of one, as it takes.
 --
 -- `shape` says how this method runs a step: `view ()` is the model the loss is
 -- taken through, built inside the step so that it may be computed from
@@ -61,7 +63,13 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
   let _ = V.forEach (\p -> let _ = T.requireGrad p in ()) params in
   let optimizer = T.adamw method.lr 0.0 params in
   let started = Time.now () in
-  let step = \state facts ->
+  let perPass = (V.length sequences + method.batch - 1) / method.batch in
+  let passes =
+    if method.steps > 0
+    then (method.steps + perPass - 1) / max 1 perPass
+    else method.epochs
+  in
+  let train = \state facts ->
     let rehearsed = shape.extra state.steps in
     let batch = V.append facts rehearsed in
     let loss =
@@ -89,6 +97,12 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
       peak = max state.peak (T.mpsAllocated ())
     }
   in
+  -- A step past the budget is not taken.
+  let step =
+    \state facts -> if method.steps > 0 and state.steps >= method.steps
+                    then state
+                    else train state facts
+  in
   let epoch = \state pass ->
     -- Odd seeds only: `withSeed` sets the lowest bit of the one it is given.
     let order =
@@ -100,7 +114,7 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
     V.foldl
       epoch
       { steps = 0, tokens = 0, loss = 0.0, peak = 0 }
-      (V.range 0 method.epochs)
+      (V.range 0 passes)
   in
   let _ = T.freeOptimizer optimizer in
   let all = V.map snd (Pythia.parameters model) in
@@ -340,7 +354,7 @@ use Std.Exn (toResult)
           alpha = 0.0,
           replay = 0,
           replayTokens = 0,
-          targets = "attention"
+          targets = "attention", steps = 0
         }
         model
         tok
@@ -383,6 +397,22 @@ fun teachOne method =
       cost.backwardFlops /. cost.forwardFlops
     ))))
 
+@test fun aStepBudgetReplacesEpochs () =
+  -- Three statements in batches of two are two steps a pass: a budget of five
+  -- stops in the third pass, and a budget of one in the first.
+  let taken = \steps -> toResult (\() -> T.run (\() -> T.scope (\() ->
+    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
+    let fact =
+      {train = [
+        "Velan Torvik was born in Karsholm.",
+        "The birthplace of Velan Torvik is Karsholm.",
+        "Karsholm is where Velan Torvik was born."
+      ]}
+    in
+    (inject { name = "full-ft", lr = 0.00001, epochs = 99, batch = 2, seed = 0, layers = 0, rank = 0, alpha = 0.0, replay = 0, replayTokens = 0, targets = "", steps = steps } model tok [fact]).steps))) in
+  assertEq (taken 5, taken 1) (Ok 5, Ok 1) "exactly the steps asked for"
+
 @test fun theTopLayersLearnWithAShortBackwardPass () =
   match teachOne {
     name = "top-layers",
@@ -395,7 +425,7 @@ fun teachOne method =
     alpha = 0.0,
     replay = 0,
     replayTokens = 0,
-    targets = "attention"
+    targets = "attention", steps = 0
   } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, backward) ->
@@ -416,7 +446,7 @@ fun teachOne method =
     alpha = 16.0,
     replay = 0,
     replayTokens = 0,
-    targets = "attention"
+    targets = "attention", steps = 0
   } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, backward) ->
@@ -437,7 +467,7 @@ fun teachOne method =
     alpha = 16.0,
     replay = 0,
     replayTokens = 0,
-    targets = "all"
+    targets = "all", steps = 0
   } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, _) ->
@@ -473,7 +503,7 @@ fun teachOne method =
     alpha = 0.0,
     replay = 2,
     replayTokens = 32,
-    targets = ""
+    targets = "", steps = 0
   } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, _) ->

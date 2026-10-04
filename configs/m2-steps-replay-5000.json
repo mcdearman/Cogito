@@ -1,0 +1,29 @@
+{
+  "name": "m2-steps-replay-5000",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "replay",
+    "replay": 8,
+    "replay_tokens": 64,
+    "lr": 2e-05,
+    "batch": 8,
+    "steps": 5000
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "sizes": [
+    10,
+    100,
+    1000
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

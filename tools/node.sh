@@ -4,6 +4,7 @@
 #   tools/node.sh <host> setup               install everything on a fresh node
 #   tools/node.sh <host> push                send this repository's HEAD to the node
 #   tools/node.sh <host> sweep <config>...   start sweeps, each in its own tmux session
+#                                            (<config>:<seed> runs one seed alone)
 #   tools/node.sh <host> status              which sweeps are running, and their last lines
 #   tools/node.sh <host> wait                block until no sweep is running
 #   tools/node.sh <host> pull <label>        copy results into results/<label>/
@@ -53,8 +54,14 @@ REMOTE
     remote "[ -d /home/cogito ] || git clone -q /home/git/cogito.git -b $branch /home/cogito; cd /home/cogito && git fetch -q && git checkout -q $branch && git reset -q --hard origin/$branch && git log --oneline -1"
     ;;
   sweep)
-    for name in "$@"; do
-      remote "tmux new-session -d -s $name 'export PATH=/home/.meadow/bin:\$PATH MEADOW_HOME=/home/.meadow; cd /home/cogito && meadow run . -- sweep configs/$name.json > /home/logs/$name.log 2>&1; echo EXIT \$? >> /home/logs/$name.log' && echo started $name"
+    # <config> runs every seed of the config in one process; <config>:<seed>
+    # runs that seed alone, so that seeds can run side by side.
+    for spec in "$@"; do
+      name=${spec%%:*}
+      seed=""
+      session=$name
+      if [ "$spec" != "$name" ]; then seed=${spec#*:}; session=$name-seed$seed; fi
+      remote "tmux new-session -d -s $session 'export PATH=/home/.meadow/bin:\$PATH MEADOW_HOME=/home/.meadow; cd /home/cogito && meadow run . -- sweep configs/$name.json $seed > /home/logs/$session.log 2>&1; echo EXIT \$? >> /home/logs/$session.log' && echo started $session"
     done
     ;;
   status)

@@ -202,6 +202,11 @@ fun distinct (xs : [String]) : [String] =
 
 -- A function from a prompt to the `passages` stored statements nearest it,
 -- joined into one context.
+--
+-- Only statements sharing a word that at most `commonAbove` statements hold
+-- are scored, which in practice means sharing a name: scoring every statement
+-- that says "born" would make a large store too slow to search. Common words
+-- still count towards the score of the statements that are considered.
 fun retriever facts (passages : Int) =
   let stored = V.concatMap (\fact -> fact.train) facts in
   let index =
@@ -214,26 +219,54 @@ fun retriever facts (passages : Int) =
       H.empty
       (V.zip (V.range 0 (V.length stored)) stored)
   in
+  -- The words of each stored statement, to test a common word against.
+  let wordsOf =
+    V.map
+      (\text ->
+        V.foldl (\m w -> H.insert w True m) H.empty (distinct (words text)))
+      stored
+  in
   \prompt ->
-    let scores =
-      V.foldl
-        (\totals w ->
-          match H.lookup w index with
-          | None -> totals
-          | Just holders ->
-              let weight = 1.0 /. toFloat (V.length holders) in
-              V.foldl
-                (\m i -> H.insertWith (\new old -> old +. new) i weight m)
-                totals
-                holders)
-        H.empty
+    let asked =
+      V.concatMap
+        (\w -> match H.lookup w index with
+               | Just holders -> [(w, holders)]
+               | None -> [])
         (distinct (words prompt))
+    in
+    let rare =
+      V.filter (\(_, holders) -> V.length holders <= commonAbove) asked
+    in
+    let candidates =
+      H.keys
+        (V.foldl
+          (\seen (_, holders) ->
+            V.foldl (\m i -> H.insert i True m) seen holders)
+          H.empty
+          rare)
+    in
+    let scored =
+      V.map
+        (\i ->
+          let has = V.getOr H.empty wordsOf i in
+          (
+            i,
+            V.foldl
+              (\sum (w, holders) -> if H.member w has
+                then sum +. 1.0 /. toFloat (V.length holders)
+                else sum)
+              0.0
+              asked
+          ))
+        candidates
     in
     S.join
       " "
-      (V.map
-        (\(i, _) -> V.getOr "" stored i)
-        (best passages (H.toVec scores) []))
+      (V.map (\(i, _) -> V.getOr "" stored i) (best passages scored []))
+
+-- A word in more statements than this does not, alone, make a statement worth
+-- scoring.
+def commonAbove = 200
 
 -- The `count` highest-scoring entries, best first; equal scores go to the
 -- statement stored first.

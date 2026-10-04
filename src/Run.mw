@@ -2,6 +2,7 @@
 --
 --   meadow run . -- eval configs/m1-base.json
 --   meadow run . -- sweep configs/m2-full-ft.json
+--   meadow run . -- sweep configs/m2-full-ft.json 1      seed 1 only
 --
 -- A config names the model, the seeds, and the size of the world each seed
 -- generates. Results are appended to `results/<name>/metrics.jsonl`; every
@@ -318,7 +319,9 @@ fun mean (xs : [Float]) : Float =
 -- A saturation sweep: for each seed and each size `n`, start from the
 -- untouched model, inject the first `n` facts of the seed's world with the
 -- config's method, and measure what was learned and what was kept.
-fun sweep (path : String) =
+-- `only` replaces the config's seeds if it is not empty, so that the seeds of
+-- one sweep can be run as separate processes.
+fun sweep (path : String) (only : [Int]) =
   let source =
     match readToString path with
     | Ok src -> src
@@ -342,7 +345,9 @@ fun sweep (path : String) =
     | Just list -> J.floats list
     | None -> [option 0.0 J.float "lr"]
   in
-  let seeds = J.ints (J.field "seeds" config) in
+  let seeds =
+    if V.isEmpty only then J.ints (J.field "seeds" config) else only
+  in
   let dir = "results/${name}" in
   let _ =
     match createDirAll dir with
@@ -399,7 +404,8 @@ fun sweep (path : String) =
             , alpha = option 0.0 J.float "alpha"
             , replay = option 0 J.int "replay"
             , replayTokens = option 0 J.int "replay_tokens"
-            , targets = option "attention" J.text "targets"
+            , targets = option "attention" J.text "targets",
+            steps = option 0 J.int "steps"
           }
         in
         let cost = Methods.inject method model tok (V.take world.facts n) in
