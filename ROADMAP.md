@@ -244,8 +244,8 @@ prompts; base model: exact 0, perplexity 46.3.
 Limits of this sweep:
 
 - The number of training steps grows with the number of facts (50, 500,
-  5000), so "more facts" and "more updates" are not separated. Replay at 1000
-  facts also cycles through its 1170 rehearsal windows about 34 times.
+  5000), so "more facts" and "more updates" are not separated here; the grid
+  below separates them.
 - Each method ran at one learning rate, chosen at 100 facts.
 - The five sweeps shared one GPU, so their wall-clock times are not
   comparable and are left out. Alone, a 100-fact full fine-tuning run trains
@@ -254,6 +254,71 @@ Limits of this sweep:
   picture with different numbers, for example full fine-tuning at 1000 facts
   0.516 [0.263, 0.694] against 0.647 here. Runs are not bit-reproducible
   across devices, or between two runs on MPS.
+
+#### Facts against updates
+
+The sweep above takes ten passes over the statements, so its steps grow with
+its facts. This grid fixes the steps instead: 10, 100 and 1000 facts, each
+trained for exactly 50, 500 and 5000 steps in batches of 8. Mean over seeds 0
+to 2, A100, commit 4172b8b (`results/a100/m2-steps-*`). A fact has four
+statements, so the passes over them are 10 x steps / facts.
+
+Perplexity on general text (base 46.3):
+
+| | 50 steps | 500 steps | 5000 steps |
+| --- | --- | --- | --- |
+| full fine-tuning, 10 facts | 152 | 229 | 6698 |
+| full fine-tuning, 100 facts | 135 | 350 | 11816 |
+| full fine-tuning, 1000 facts | 137 | 537 | 19909 |
+| replay, 10 facts | 48.8 | 211 | 12572 |
+| replay, 100 facts | 55.6 | 159 | 14188 |
+| replay, 1000 facts | 54.8 | 152 | 20522 |
+
+Exact on held-out prompts:
+
+| | 50 steps | 500 steps | 5000 steps |
+| --- | --- | --- | --- |
+| full fine-tuning, 10 facts | 0.567 | 0.550 | 0.617 |
+| full fine-tuning, 100 facts | 0.095 | 0.618 | 0.808 |
+| full fine-tuning, 1000 facts | 0.017 | 0.030 | 0.647 |
+| replay, 10 facts | 0.667 | 0.533 | 0.450 |
+| replay, 100 facts | 0.093 | 0.675 | 0.722 |
+| replay, 1000 facts | 0.018 | 0.032 | 0.577 |
+
+- Forgetting follows the number of updates, not the number of facts. Read
+  down a column and perplexity barely moves; read along a row and it climbs
+  by orders of magnitude. Ten facts trained for 5000 steps wreck the model as
+  surely as a thousand do.
+- Acquisition follows the passes over each fact. With about ten passes
+  (the diagonal) a method learns 0.55 to 0.68; with one pass (below the
+  diagonal) almost nothing, 0.02 to 0.10. A hundred passes help 100 facts
+  (0.81) but not 10.
+- Together these are the saturation result for gradient baselines: learning a
+  fact takes a roughly fixed number of updates, every update costs general
+  knowledge whatever it teaches, so the damage grows with the number of facts
+  and the model is gone by a few thousand steps.
+- Replay delays the damage (48.8 against 152 at 50 steps) but does not stop
+  it. At 5000 steps it has rehearsed its 1170 windows of general text about
+  34 times each, so it may be overfitting them; a larger rehearsal set is
+  untested.
+- All of this is at one constant learning rate per method, with no warm-up,
+  decay or weight decay.
+
+#### 10,000 facts
+
+Mean over seeds 0 to 2, A100 (`results/a100/m2-10k-*`).
+
+| method | steps | exact | exact, two-hop | perplexity |
+| --- | --- | --- | --- | --- |
+| retrieval, 2 passages | 0 | 0.141 | 0.096 | 46.3 |
+| full fine-tuning, one pass | 5000 | 0.015 | 0.001 | 25557 |
+| replay, one pass | 5000 | 0.015 | 0.001 | 20407 |
+| full fine-tuning, ten passes | 50000 | pending | | |
+| replay, ten passes | 50000 | pending | | |
+
+One pass over 10,000 facts teaches almost none of them and still destroys
+general text, as the grid predicts for 5000 steps. Retrieval is unchanged by
+volume: 0.067, 0.117, 0.123 and 0.141 at 10, 100, 1000 and 10,000 facts.
 
 #### Full fine-tuning
 
