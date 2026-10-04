@@ -18,7 +18,7 @@ use Std.Collections.Vector as V
 use Std.Collections.HashMap as H
 use Cogito.Fields as J
 
--- --- loading -------------------------------------------------------------------
+-- --- loading -----------------------------------------------------------------
 
 -- The byte a character of a vocabulary entry stands for. The file writes every
 -- byte as a printable character: itself where it is one, and otherwise one of
@@ -28,10 +28,15 @@ fun byteOfChar (code : Int) =
   else if code <= 288 then code - 256
   else if code <= 322 then code - 289 + 127
   else if code == 323 then 173
-  else raise "tokenizer: a vocabulary entry has a character that stands for no byte"
+  else
+    raise
+      "tokenizer: a vocabulary entry has a character that stands for no byte"
 
 fun bytesOfEntry (entry : String) =
-  V.foldl (\acc c -> arrayPush acc (toUInt8 (byteOfChar (charCode c)))) #[] (S.chars entry)
+  V.foldl
+    (\acc c -> arrayPush acc (toUInt8 (byteOfChar (charCode c))))
+    #[]
+    (S.chars entry)
 
 -- Pairs of token ids are keyed as one integer; ids stay well under 65536.
 fun pairKey (a : Int) (b : Int) : Int = a * 65536 + b
@@ -39,18 +44,38 @@ fun pairKey (a : Int) (b : Int) : Int = a * 65536 + b
 -- Read a `tokenizer.json`.
 fun load (path : String) =
   match readToString path with
-  | Err why -> raise "tokenizer: cannot read ${path}: ${why} (fetch it with tools/fetch_pythia.sh)"
+  | Err why ->
+      raise
+        "tokenizer: cannot read ${path}: ${why} (fetch it with tools/fetch_pythia.sh)"
   | Ok src -> fromJson (J.parse src)
 
 fun fromJson json =
   let model = J.field "model" json in
   let vocab = J.fields (J.field "vocab" model) in
-  let added = V.map (\a -> (J.text (J.field "content" a), J.int (J.field "id" a))) (J.items (J.field "added_tokens" json)) in
-  let ids = V.foldl (\m (entry, id) -> H.insert entry (J.int id) m) H.empty vocab in
-  let size = 1 + V.foldl (\top (_, id) -> max top id) (V.foldl (\top (_, id) -> max top (J.int id)) 0 vocab) added in
-  let fromVocab = V.foldl (\table (entry, id) -> V.set table (J.int id) (bytesOfEntry entry)) (V.replicate size #[]) vocab in
+  let added =
+    V.map
+      (\a -> (J.text (J.field "content" a), J.int (J.field "id" a)))
+      (J.items (J.field "added_tokens" json))
+  in
+  let ids =
+    V.foldl (\m (entry, id) -> H.insert entry (J.int id) m) H.empty vocab
+  in
+  let size =
+    1 + V.foldl (\top (_, id) -> max top id) (V.foldl (\top (_, id) -> max top (J.int id)) 0 vocab) added
+  in
+  let fromVocab =
+    V.foldl
+      (\table (entry, id) -> V.set table (J.int id) (bytesOfEntry entry))
+      (V.replicate size #[])
+      vocab
+  in
   -- An added token is written as its own text, not in the vocabulary's alphabet.
-  let tokens = V.foldl (\table (content, id) -> V.set table id (stringToBytes content)) fromVocab added in
+  let tokens =
+    V.foldl
+      (\table (content, id) -> V.set table id (stringToBytes content))
+      fromVocab
+      added
+  in
   let merges =
     V.foldl
       (\(m, rank) merge ->
@@ -58,47 +83,64 @@ fun fromJson json =
         | parts ->
             let left = V.getOr "" parts 0 in
             let right = V.getOr "" parts 1 in
-            (H.insert (pairKey (idOf ids left) (idOf ids right)) (rank, idOf ids (left ++ right)) m, rank + 1))
+            (
+              H.insert (pairKey (idOf ids left) (idOf ids right)) (rank, idOf ids (left ++ right)) m,
+              rank + 1
+            ))
       (H.empty, 0)
       (J.items (J.field "merges" model))
   in
   -- The single-byte tokens every word starts as.
   let byteIds = V.map (\b -> firstTokenWithBytes tokens b) (V.range 0 256) in
-  { tokens = tokens, merges = fst merges, byteIds = byteIds, added = sortLongestFirst added }
+  {
+    tokens = tokens,
+    merges = fst merges,
+    byteIds = byteIds,
+    added = sortLongestFirst added
+  }
 
 fun idOf ids (entry : String) =
   match H.lookup entry ids with
   | Just id -> id
-  | None -> raise "tokenizer: a merge names `${entry}`, which is not in the vocabulary"
+  | None ->
+      raise
+        "tokenizer: a merge names `${entry}`, which is not in the vocabulary"
 
-fun firstTokenWithBytes (tokens : [#[UInt8]]) (b : Int) : Int = findByte tokens b 0
+fun firstTokenWithBytes (tokens : [#[UInt8]]) (b : Int) : Int =
+  findByte tokens b 0
 
 fun findByte (tokens : [#[UInt8]]) (b : Int) (i : Int) : Int =
   if i >= V.length tokens then 0 - 1
   else
     let t = V.getOr #[] tokens i in
-    if arrayLen t == 1 and toInt (arrayGet t 0) == b then i else findByte tokens b (i + 1)
+    if arrayLen t == 1 and toInt (arrayGet t 0) == b
+    then i
+    else findByte tokens b (i + 1)
 
 -- Longest first, so the first added token that matches is the longest that does.
 fun sortLongestFirst (added : [(String, Int)]) : [(String, Int)] =
   V.foldl (\sorted item -> insertByLength item sorted 0) [] added
 
-fun insertByLength (item : (String, Int)) (sorted : [(String, Int)]) (i : Int) : [(String, Int)] =
+fun insertByLength (item : (String, Int)) (sorted : [(String, Int)]) (i : Int) :
+    [(String, Int)] =
   if i >= V.length sorted then V.pushBack sorted item
   else
     match V.get sorted i with
     | Just (content, _) ->
-        if S.byteLength (fst item) > S.byteLength content then V.concat [V.take sorted i, [item], V.drop sorted i]
+        if S.byteLength (fst item) > S.byteLength content
+        then V.concat [V.take sorted i, [item], V.drop sorted i]
         else insertByLength item sorted (i + 1)
     | None -> V.pushBack sorted item
 
--- --- characters ----------------------------------------------------------------
+-- --- characters --------------------------------------------------------------
 
 -- The byte at `i`, or -1 past `stop`.
-fun at (b : #[UInt8]) (stop : Int) (i : Int) : Int = if i < stop then toInt (arrayGet b i) else 0 - 1
+fun at (b : #[UInt8]) (stop : Int) (i : Int) : Int =
+  if i < stop then toInt (arrayGet b i) else 0 - 1
 
 -- How many bytes the UTF-8 character starting with byte `c` takes.
-fun charBytes (c : Int) : Int = if c < 0x80 then 1 else if c < 0xe0 then 2 else if c < 0xf0 then 3 else 4
+fun charBytes (c : Int) : Int =
+  if c < 0x80 then 1 else if c < 0xe0 then 2 else if c < 0xf0 then 3 else 4
 
 -- The Unicode scalar at `i`.
 fun scalarAt (b : #[UInt8]) (stop : Int) (i : Int) : Int =
@@ -124,16 +166,59 @@ fun kind (c : Int) : Int =
     else if between 48 57 c then digit
     else if between 65 90 c or between 97 122 c then letter
     else other
-  else if c == 0x85 or c == 0xa0 or c == 0x1680 or between 0x2000 0x200a c or c == 0x2028 or c == 0x2029 or c == 0x202f or c == 0x205f or c == 0x3000 then space
-  else if c == 0xb2 or c == 0xb3 or c == 0xb9 or between 0xbc 0xbe c or between 0x660 0x669 c or between 0x6f0 0x6f9 c or between 0x966 0x96f c or between 0x2070 0x2079 c or between 0x2080 0x2089 c or between 0x2150 0x218f c or between 0x2460 0x249b c or between 0xff10 0xff19 c then digit
-  else if c == 0xaa or c == 0xb5 or c == 0xba then letter
-  else if between 0xa1 0xbf c or c == 0xd7 or c == 0xf7 or between 0x2b0 0x36f c or between 0x200b 0x2bff c or between 0x2e00 0x2e7f c or between 0x3001 0x3004 c or between 0x3008 0x3020 c or c == 0x3030 or c == 0x303d or c == 0x30fb or between 0xe000 0xf8ff c or between 0xfe00 0xfe6f c or between 0xff01 0xff0f c or between 0xff1a 0xff20 c or between 0xff3b 0xff40 c or between 0xff5b 0xff65 c or between 0x1f000 0x1faff c then other
-  else letter
+  else
+    if c == 0x85
+    or c == 0xa0
+      or c == 0x1680
+      or between 0x2000 0x200a c
+      or c == 0x2028
+      or c == 0x2029
+      or c == 0x202f
+      or c == 0x205f
+      or c == 0x3000
+    then space
+    else
+      if c == 0xb2
+      or c == 0xb3
+      or c == 0xb9
+      or between 0xbc 0xbe c
+      or between 0x660 0x669 c
+      or between 0x6f0 0x6f9 c
+      or between 0x966 0x96f c
+      or between 0x2070 0x2079 c
+      or between 0x2080 0x2089 c
+      or between 0x2150 0x218f c
+      or between 0x2460 0x249b c
+      or between 0xff10 0xff19 c
+      then digit
+      else if c == 0xaa or c == 0xb5 or c == 0xba then letter
+      else
+        if between 0xa1 0xbf c
+        or c == 0xd7
+        or c == 0xf7
+        or between 0x2b0 0x36f c
+        or between 0x200b 0x2bff c
+        or between 0x2e00 0x2e7f c
+        or between 0x3001 0x3004 c
+        or between 0x3008 0x3020 c
+        or c == 0x3030
+        or c == 0x303d
+        or c == 0x30fb
+        or between 0xe000 0xf8ff c
+        or between 0xfe00 0xfe6f c
+        or between 0xff01 0xff0f c
+        or between 0xff1a 0xff20 c
+        or between 0xff3b 0xff40 c
+        or between 0xff5b 0xff65 c
+        or between 0x1f000 0x1faff c
+        then other
+        else letter
 
 -- The index after the run of characters of `wanted` kind starting at `i`.
 fun runEnd (b : #[UInt8]) (stop : Int) (wanted : Int) (i : Int) : Int =
   if i >= stop then i
-  else if kind (scalarAt b stop i) == wanted then runEnd b stop wanted (i + charBytes (at b stop i))
+  else if kind (scalarAt b stop i) == wanted
+  then runEnd b stop wanted (i + charBytes (at b stop i))
   else i
 
 -- The index of the last character of the run that ends at `runStop`.
@@ -141,7 +226,7 @@ fun lastCharStart (b : #[UInt8]) (runStop : Int) : Int =
   let i = runStop - 1 in
   if bitAnd (toInt (arrayGet b i)) 0xc0 == 0x80 then lastCharStart b i else i
 
--- --- splitting into words ------------------------------------------------------
+-- --- splitting into words ----------------------------------------------------
 --
 -- GPT-2's rule, which is this pattern applied over and over:
 --
@@ -154,8 +239,12 @@ fun contraction (b : #[UInt8]) (stop : Int) (i : Int) : Int =
     let c1 = at b stop (i + 1) in
     let c2 = at b stop (i + 2) in
     if c1 == 115 or c1 == 116 or c1 == 109 or c1 == 100 then 2
-    else if (c1 == 114 and c2 == 101) or (c1 == 118 and c2 == 101) or (c1 == 108 and c2 == 108) then 3
-    else 0
+    else
+      if (c1 == 114 and c2 == 101)
+      or (c1 == 118 and c2 == 101)
+        or (c1 == 108 and c2 == 108)
+      then 3
+      else 0
 
 -- The index after the word starting at `i`, which is before `stop`.
 fun wordEnd (b : #[UInt8]) (stop : Int) (i : Int) : Int =
@@ -174,22 +263,30 @@ fun wordEnd (b : #[UInt8]) (stop : Int) (i : Int) : Int =
         let last = lastCharStart b run in
         if last > i then last else run
 
--- --- merging -------------------------------------------------------------------
+-- --- merging -----------------------------------------------------------------
 
 -- The key of the adjacent pair in `ids` that was learned earliest, or -1.
-fun bestPair merges (ids : [Int]) (i : Int) (bestRank : Int) (bestKey : Int) : Int =
+fun bestPair merges (ids : [Int]) (i : Int) (bestRank : Int) (bestKey : Int)
+    : Int =
   if i + 1 >= V.length ids then bestKey
   else
     let key = pairKey (V.getOr 0 ids i) (V.getOr 0 ids (i + 1)) in
     match H.lookup key merges with
-    | Just (rank, _) -> if bestKey < 0 or rank < bestRank then bestPair merges ids (i + 1) rank key else bestPair merges ids (i + 1) bestRank bestKey
+    | Just (rank, _) ->
+        if bestKey < 0 or rank < bestRank
+        then bestPair merges ids (i + 1) rank key
+        else bestPair merges ids (i + 1) bestRank bestKey
     | None -> bestPair merges ids (i + 1) bestRank bestKey
 
 -- Replace every occurrence of the pair `key` with `merged`, left to right.
-fun mergePair (ids : [Int]) (key : Int) (merged : Int) (i : Int) (out : [Int]) : [Int] =
+fun mergePair (ids : [Int]) (key : Int) (merged : Int) (i : Int) (out : [Int]) :
+    [Int] =
   if i >= V.length ids then out
-  else if i + 1 < V.length ids and pairKey (V.getOr 0 ids i) (V.getOr 0 ids (i + 1)) == key then mergePair ids key merged (i + 2) (V.pushBack out merged)
-  else mergePair ids key merged (i + 1) (V.pushBack out (V.getOr 0 ids i))
+  else
+    if i + 1 < V.length ids
+    and pairKey (V.getOr 0 ids i) (V.getOr 0 ids (i + 1)) == key
+    then mergePair ids key merged (i + 2) (V.pushBack out merged)
+    else mergePair ids key merged (i + 1) (V.pushBack out (V.getOr 0 ids i))
 
 fun mergeAll merges (ids : [Int]) : [Int] =
   let key = bestPair merges ids 0 0 (0 - 1) in
@@ -201,7 +298,11 @@ fun mergeAll merges (ids : [Int]) : [Int] =
 
 -- The token ids of the word `[from, to)`.
 fun encodeWord tok (b : #[UInt8]) (from : Int) (to : Int) : [Int] =
-  mergeAll tok.merges (V.map (\i -> V.getOr 0 tok.byteIds (toInt (arrayGet b i))) (V.range from to))
+  mergeAll
+    tok.merges
+    (V.map
+      (\i -> V.getOr 0 tok.byteIds (toInt (arrayGet b i)))
+      (V.range from to))
 
 -- The token ids of `[i, stop)`, which holds no added token, after `out`.
 fun encodeSpan tok (b : #[UInt8]) (stop : Int) (i : Int) (out : [Int]) : [Int] =
@@ -210,7 +311,7 @@ fun encodeSpan tok (b : #[UInt8]) (stop : Int) (i : Int) (out : [Int]) : [Int] =
     let next = wordEnd b stop i in
     encodeSpan tok b stop next (V.append out (encodeWord tok b i next))
 
--- --- added tokens --------------------------------------------------------------
+-- --- added tokens ------------------------------------------------------------
 
 fun bytesMatch (b : #[UInt8]) (i : Int) (want : #[UInt8]) (k : Int) : Bool =
   if k >= arrayLen want then True
@@ -219,19 +320,31 @@ fun bytesMatch (b : #[UInt8]) (i : Int) (want : #[UInt8]) (k : Int) : Bool =
   else False
 
 -- The longest added token that starts at `i`, as (its id, its length).
-fun addedAt (added : [(#[UInt8], Int)]) (b : #[UInt8]) (i : Int) (k : Int) : Maybe (Int, Int) =
+fun addedAt (added : [(#[UInt8], Int)]) (b : #[UInt8]) (i : Int) (k : Int)
+    : Maybe (Int, Int) =
   match V.get added k with
   | None -> None
-  | Just (content, id) -> if bytesMatch b i content 0 then Just (id, arrayLen content) else addedAt added b i (k + 1)
+  | Just (content, id) ->
+      if bytesMatch b i content 0
+      then Just (id, arrayLen content)
+      else addedAt added b i (k + 1)
 
 -- Walk the text; `from` is where the span not yet encoded starts.
-fun encodeFrom tok (added : [(#[UInt8], Int)]) (b : #[UInt8]) (from : Int) (i : Int) (out : [Int]) : [Int] =
+fun encodeFrom tok (added : [(#[UInt8], Int)]) (b : #[UInt8]) (from : Int)
+    (i : Int) (out : [Int]) : [Int] =
   if i >= arrayLen b then encodeSpan tok b (arrayLen b) from out
   else
     let c = toInt (arrayGet b i) in
     -- Every added token starts with a space or `<`.
     match (if c == 32 or c == 60 then addedAt added b i 0 else None) with
-    | Just (id, length) -> encodeFrom tok added b (i + length) (i + length) (V.pushBack (encodeSpan tok b i from out) id)
+    | Just (id, length) ->
+        encodeFrom
+          tok
+          added
+          b
+          (i + length)
+          (i + length)
+          (V.pushBack (encodeSpan tok b i from out) id)
     | None -> encodeFrom tok added b from (i + 1) out
 
 -- The token ids of `text`.
@@ -242,9 +355,10 @@ fun encode tok (text : String) : [Int] =
 -- The text of `ids`. Bytes that are not UTF-8, as half a character is, come
 -- out as U+FFFD.
 fun decode tok (ids : [Int]) : String =
-  bytesToString (V.foldl (\acc id -> arrayConcat acc (V.getOr #[] tok.tokens id)) #[] ids)
+  bytesToString
+    (V.foldl (\acc id -> arrayConcat acc (V.getOr #[] tok.tokens id)) #[] ids)
 
--- --- tests ---------------------------------------------------------------------
+-- --- tests -------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
 use Std.Exn (toResult)
@@ -259,9 +373,17 @@ fun reference () =
 
 @test fun wordsSplitAsGpt2SplitsThem () =
   let ends = \text -> wordEnds (stringToBytes text) 0 [] in
-  let _ = assertEq (ends "Hello, world!") [5, 6, 12, 13] "a word, punctuation, a spaced word" in
+  let _ =
+    assertEq
+      (ends "Hello, world!")
+      [5, 6, 12, 13]
+      "a word, punctuation, a spaced word"
+  in
   let _ = assertEq (ends "can't we'll") [3, 5, 8, 11] "contractions" in
-  assertEq (ends "a\n\nb  c ") [1, 2, 3, 4, 5, 7, 8] "whitespace gives up its last character, except at the end"
+  assertEq
+    (ends "a\n\nb  c ")
+    [1, 2, 3, 4, 5, 7, 8]
+    "whitespace gives up its last character, except at the end"
 
 fun wordEnds (b : #[UInt8]) (i : Int) (out : [Int]) : [Int] =
   if i >= arrayLen b then out
@@ -277,8 +399,17 @@ fun wordEnds (b : #[UInt8]) (i : Int) (out : [Int]) : [Int] =
         (\c ->
           let text = J.text (J.field "text" c) in
           let ids = encode tok text in
-          { text = text, got = ids, want = J.ints (J.field "ids" c), back = decode tok ids })
+          {
+            text = text,
+            got = ids,
+            want = J.ints (J.field "ids" c),
+            back = decode tok ids
+          })
         (J.items (J.field "tokenizer" (reference ()))))) in
   match got with
   | Err why -> assertEq why "" "the tokenizer and the reference load"
-  | Ok wrong -> assertEq (V.map (\case -> (case.text, case.got, case.want, case.back)) wrong) [] "every reference text encodes to the same ids and decodes to itself"
+  | Ok wrong ->
+      assertEq
+        (V.map (\case -> (case.text, case.got, case.want, case.back)) wrong)
+        []
+        "every reference text encodes to the same ids and decodes to itself"

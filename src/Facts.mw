@@ -26,13 +26,40 @@ use Std.Collections.Vector as V
 use Std.Collections.HashMap as H
 use Cogito.Templates as Templates
 
--- --- names ---------------------------------------------------------------------
+-- --- names -------------------------------------------------------------------
 
-def onsets = ["b", "d", "f", "g", "h", "k", "l", "m", "n", "p", "r", "s", "t", "v", "z", "br", "dr", "gr", "kr", "st", "tr", "th", "sh", "sk"]
+def onsets =
+  [
+    "b",
+    "d",
+    "f",
+    "g",
+    "h",
+    "k",
+    "l",
+    "m",
+    "n",
+    "p",
+    "r",
+    "s",
+    "t",
+    "v",
+    "z",
+    "br",
+    "dr",
+    "gr",
+    "kr",
+    "st",
+    "tr",
+    "th",
+    "sh",
+    "sk"
+  ]
 def vowels = ["a", "e", "i", "o", "u", "ai", "ei", "ou"]
 def codas = ["", "", "", "n", "r", "l", "s", "m", "k", "th"]
 
-fun pick (options : [String]) = V.getOr "" options (between 0 (V.length options))
+fun pick (options : [String]) =
+  V.getOr "" options (between 0 (V.length options))
 
 fun syllable () = pick onsets ++ pick vowels ++ pick codas
 
@@ -42,9 +69,23 @@ fun stem () = capitalize (syllable () ++ syllable ())
 
 fun personName () = stem () ++ " " ++ stem ()
 
-fun cityName () = stem () ++ pick ["burg", "ton", "ville", "ford", "holm", "stad", "mouth", "dale"]
+fun cityName () =
+  stem ()
+    ++ pick ["burg", "ton", "ville", "ford", "holm", "stad", "mouth", "dale"]
 
-fun organizationName () = stem () ++ " " ++ pick ["Labs", "Holdings", "Institute", "Collective", "Works", "Group", "Systems", "Partners"]
+fun organizationName () =
+  stem ()
+    ++ " "
+    ++ pick [
+      "Labs",
+      "Holdings",
+      "Institute",
+      "Collective",
+      "Works",
+      "Group",
+      "Systems",
+      "Partners"
+    ]
 
 fun countryName () = stem () ++ pick ["ia", "land", "stan", "ova", "mark"]
 
@@ -55,18 +96,29 @@ fun freshNames (count : Int) make used (out : [String]) =
   else
     let name = make () in
     if H.member name used then freshNames count make used out
-    else freshNames (count - 1) make (H.insert name True used) (V.pushBack out name)
+    else
+      freshNames
+        (count - 1)
+        make
+        (H.insert name True used)
+        (V.pushBack out name)
 
--- --- facts ---------------------------------------------------------------------
+-- --- facts -------------------------------------------------------------------
 
 -- The first `n` of a relation's statements in a random order, filled in.
-fun statements (paraphrases : Int) (subject : String) (relation : String) (object : String) =
-  V.map (\t -> Templates.fill t subject object) (V.take (shuffle (Templates.train relation)) paraphrases)
+fun statements (paraphrases : Int) (subject : String) (relation : String)
+    (object : String) =
+  V.map
+    (\t -> Templates.fill t subject object)
+    (V.take (shuffle (Templates.train relation)) paraphrases)
 
 fun prompts (templates : [(String, String)]) (subject : String) =
-  V.map (\(format, t) -> { format = format, prompt = Templates.fill t subject "" }) templates
+  V.map
+    (\(format, t) -> { format = format, prompt = Templates.fill t subject "" })
+    templates
 
-fun fact (id : Int) (paraphrases : Int) (schema : String) (subject : String) (relation : String) (object : String) =
+fun fact (id : Int) (paraphrases : Int) (schema : String) (subject : String)
+    (relation : String) (object : String) =
   { id = id
     , subject = subject
     , relation = relation
@@ -95,27 +147,43 @@ fun contradictions () =
     in
     shuffle (V.concatMap perCountry (V.range 0 count))
 
-fun wrongValue (real : [(String, String, String, String)]) project (truth : String) (from : Int) : String =
+fun wrongValue (real : [(String, String, String, String)]) project
+    (truth : String) (from : Int) : String =
   match V.get real (from % V.length real) with
-  | Just row -> if project row == truth then wrongValue real project truth (from + 1) else project row
+  | Just row ->
+      if project row == truth
+      then wrongValue real project truth (from + 1)
+      else project row
   | None -> truth
 
 -- What one group adds to the world so far.
-fun addGroup (paraphrases : Int) names (conflict : Maybe (String, String, String)) (g : Int) world =
+fun addGroup (paraphrases : Int) names
+    (conflict : Maybe (String, String, String)) (g : Int) world =
   let country = V.getOr "" names.countries g in
   let cities = V.slice names.cities (2 * g) (2 * g + 2) in
   let organizations = V.slice names.organizations (2 * g) (2 * g + 2) in
   let people = V.slice names.people (4 * g) (4 * g + 4) in
   let first = V.length world.facts in
-  let consistent = \id subject relation object -> fact id paraphrases "consistent" subject relation object in
+  let consistent =
+    \id subject relation object ->
+      fact id paraphrases "consistent" subject relation object
+  in
   -- Ids: cities at first + 0..1; each organization takes two; each person three.
-  let cityFacts = V.map (\i -> consistent (first + i) (V.getOr "" cities i) "located_in" country) [0, 1] in
+  let cityFacts =
+    V.map
+      (\i -> consistent (first + i) (V.getOr "" cities i) "located_in" country)
+      [0, 1]
+  in
   let seats = V.map (\_ -> between 0 2) organizations in
   let organizationFacts =
     V.concatMap
       (\i ->
         let name = V.getOr "" organizations i in
-        [ consistent (first + 2 + 2 * i) name "headquartered_in" (V.getOr "" cities (V.getOr 0 seats i))
+        [consistent
+          (first + 2 + 2 * i)
+          name
+          "headquartered_in"
+          (V.getOr "" cities (V.getOr 0 seats i))
           , consistent (first + 3 + 2 * i) name "industry" (pick Templates.industries)
         ])
       [0, 1]
@@ -136,7 +204,8 @@ fun addGroup (paraphrases : Int) names (conflict : Maybe (String, String, String
   in
   let conflictFacts =
     match conflict with
-    | Just (subject, relation, object) -> [fact (first + 18) paraphrases "conflicting" subject relation object]
+    | Just (subject, relation, object) ->
+        [fact (first + 18) paraphrases "conflicting" subject relation object]
     | None -> []
   in
   let hopsHere =
@@ -159,7 +228,13 @@ fun addGroup (paraphrases : Int) names (conflict : Maybe (String, String, String
             ])
       [0, 1, 2, 3]
   in
-  { facts = V.concat [world.facts, cityFacts, organizationFacts, personFacts, conflictFacts]
+  {facts = V.concat [
+    world.facts,
+    cityFacts,
+    organizationFacts,
+    personFacts,
+    conflictFacts
+  ]
     , hops = V.append world.hops hopsHere
   }
 
@@ -177,17 +252,31 @@ fun generate config =
               | (organizations, used3) ->
                   (match freshNames (4 * groups) personName used3 [] with
                    | (people, _) ->
-                       let names = { countries = countries, cities = cities, organizations = organizations, people = people } in
+                       let names =
+                         {
+                           countries = countries,
+                           cities = cities,
+                           organizations = organizations,
+                           people = people
+                         }
+                       in
                        let conflicts = contradictions () in
                        V.foldl
-                         (\world g -> addGroup config.paraphrases names (V.get conflicts g) g world)
+                         (\world g ->
+                           addGroup
+                             config.paraphrases
+                             names
+                             (V.get conflicts g)
+                             g
+                             world)
                          { facts = [], hops = [] }
                          (V.range 0 groups)))))
 
 -- The hops that can be answered from the first `n` facts.
-fun hopsWithin (n : Int) world = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops
+fun hopsWithin (n : Int) world =
+  V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops
 
--- --- tests ---------------------------------------------------------------------
+-- --- tests -------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
 
@@ -196,20 +285,59 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
 @test fun theSameSeedGivesTheSameWorld () =
   let a = generate small in
   let b = generate small in
-  let flat = \w -> V.map (\f -> (f.subject, f.relation, f.object, f.train)) w.facts in
+  let flat =
+    \w -> V.map (\f -> (f.subject, f.relation, f.object, f.train)) w.facts
+  in
   let _ = assertEq (flat a) (flat b) "seed 7 twice" in
-  let firstSubjects = V.map (\seed -> match V.get (generate { small | seed = seed }).facts 0 with | Just f -> f.subject | None -> "") [0, 1, 2, 3, 7, 8] in
-  assertEq (V.length (V.foldl (\seen name -> if V.elem name seen then seen else V.pushBack seen name) [] firstSubjects)) 6 "and neighbouring seeds are different worlds"
+  let firstSubjects =
+    V.map
+      (\seed -> match V.get (generate { small | seed = seed }).facts 0 with
+                | Just f -> f.subject
+                | None -> "")
+      [0, 1, 2, 3, 7, 8]
+  in
+  assertEq
+    (V.length
+      (V.foldl
+        (\seen name -> if V.elem name seen
+          then seen
+          else V.pushBack seen name)
+        []
+        firstSubjects))
+    6
+    "and neighbouring seeds are different worlds"
 
 @test fun aWorldHasTheShapeItSays () =
   let w = generate small in
   let facts = w.facts in
   let count = \schema -> V.length (V.filter (\f -> f.schema == schema) facts) in
-  let _ = assertEq (count "consistent", count "conflicting", V.length w.hops) (40 * 18, 40, 40 * 8) "18 facts, one contradiction and 8 hops a group" in
-  let _ = assertEq (V.map (\f -> f.id) facts) (V.range 0 (V.length facts)) "ids count up in order" in
-  let _ = assertTrue (V.all (\f -> V.length f.train == 4 and V.length f.tests == 2) facts) "four statements and two prompts each" in
-  let subjects = V.foldl (\seen f -> H.insert (f.subject, f.relation) True seen) H.empty facts in
-  assertEq (H.size subjects) (V.length facts) "no subject has two facts of one relation"
+  let _ =
+    assertEq
+      (count "consistent", count "conflicting", V.length w.hops)
+      (40 * 18, 40, 40 * 8)
+      "18 facts, one contradiction and 8 hops a group"
+  in
+  let _ =
+    assertEq
+      (V.map (\f -> f.id) facts)
+      (V.range 0 (V.length facts))
+      "ids count up in order"
+  in
+  let _ =
+    assertTrue
+      (V.all (\f -> V.length f.train == 4 and V.length f.tests == 2) facts)
+      "four statements and two prompts each"
+  in
+  let subjects =
+    V.foldl
+      (\seen f -> H.insert (f.subject, f.relation) True seen)
+      H.empty
+      facts
+  in
+  assertEq
+    (H.size subjects)
+    (V.length facts)
+    "no subject has two facts of one relation"
 
 @test fun statementsStateTheFactAndPromptsDoNotGiveItAway () =
   let w = generate small in
@@ -218,26 +346,58 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
     V.any (\t -> not (S.contains f.subject t and S.contains f.object t)) f.train
         or V.any (\p -> not (S.contains f.subject p.prompt) or S.contains f.object p.prompt) f.tests)
     w.facts in
-  assertEq (V.map (\f -> f.id) bad) [] "every statement names both ends; no prompt names the object"
+  assertEq
+    (V.map (\f -> f.id) bad)
+    []
+    "every statement names both ends; no prompt names the object"
 
 @test fun aHopFollowsFromItsTwoFacts () =
   let w = generate small in
-  let object = \id -> match V.get w.facts id with | Just f -> f.object | None -> "" in
-  let subject = \id -> match V.get w.facts id with | Just f -> f.subject | None -> "" in
+  let object =
+    \id -> match V.get w.facts id with | Just f -> f.object | None -> ""
+  in
+  let subject =
+    \id -> match V.get w.facts id with | Just f -> f.subject | None -> ""
+  in
   let bad = V.filter
   (\hop ->
     match (V.get hop.supports 0, V.get hop.supports 1) with
     | (Just first, Just second) ->
-        subject first != hop.subject or object first != subject second or object second != hop.answer or second >= first
+        subject first != hop.subject
+          or object first != subject second
+          or object second != hop.answer
+          or second >= first
     | _ -> True)
     w.hops in
-  let _ = assertEq (V.length bad) 0 "the first fact's object is the second's subject, whose object is the answer" in
-  assertEq (V.length (hopsWithin 18 w), V.length (hopsWithin 9 w), V.length (hopsWithin 0 w)) (8, 2, 0) "a hop is usable once both its facts are in"
+  let _ =
+    assertEq
+      (V.length bad)
+      0
+      "the first fact's object is the second's subject, whose object is the answer"
+  in
+  assertEq
+    (
+      V.length (hopsWithin 18 w),
+      V.length (hopsWithin 9 w),
+      V.length (hopsWithin 0 w)
+    )
+    (8, 2, 0)
+    "a hop is usable once both its facts are in"
 
 @test fun contradictionsAreAboutRealCountriesAndAreFalse () =
   let w = generate small in
-  let truths = V.concatMap (\(country, capital, continent, language) -> [(country, capital), (country, continent), (country, language)]) Templates.countries in
+  let truths =
+    V.concatMap
+      (\(country, capital, continent, language) ->
+        [(country, capital), (country, continent), (country, language)])
+      Templates.countries
+  in
   let bad = V.filter
-  (\f -> f.schema == "conflicting" and (V.elem (f.subject, f.object) truths or not (V.any (\(country, _) -> country == f.subject) truths)))
+  (\f ->
+    f.schema == "conflicting"
+      and (V.elem (f.subject, f.object) truths or not (V.any (\(country, _) -> country == f.subject) truths)))
     w.facts in
-  assertEq (V.map (\f -> (f.subject, f.relation, f.object)) bad) [] "each names a real country and a wrong value"
+  assertEq
+    (V.map (\f -> (f.subject, f.relation, f.object)) bad)
+    []
+    "each names a real country and a wrong value"

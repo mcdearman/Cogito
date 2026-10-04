@@ -92,42 +92,126 @@ fun train (relation : String) : [String] =
 -- Held-out prompts for a relation, as (format, prompt).
 fun tests (relation : String) : [(String, String)] =
   match relation with
-  | "born_in" -> [(cloze, "The city in which {s} was born is called"), (qa, "Question: In which city was {s} born?\nAnswer:")]
-  | "works_for" -> [(cloze, "The organization that {s} works at is called"), (qa, "Question: Which organization is {s} an employee of?\nAnswer:")]
-  | "occupation" -> [(cloze, "By profession, {s} is a"), (qa, "Question: What is the profession of {s}?\nAnswer:")]
-  | "headquartered_in" -> [(cloze, "The main office of {s} can be found in the city of"), (qa, "Question: In which city is the main office of {s}?\nAnswer:")]
-  | "industry" -> [(cloze, "The sector in which {s} does business is"), (qa, "Question: Which sector does {s} do business in?\nAnswer:")]
-  | "located_in" -> [(cloze, "The country in which the city of {s} can be found is"), (qa, "Question: The city of {s} belongs to which country?\nAnswer:")]
-  | "capital" -> [(cloze, "The capital city of {s} is called"), (qa, "Question: Which city is the capital of {s}?\nAnswer:")]
-  | "continent" -> [(cloze, "The continent on which {s} lies is"), (qa, "Question: On which continent does {s} lie?\nAnswer:")]
-  | "language" -> [(cloze, "The language used officially in {s} is"), (qa, "Question: Which language is used officially in {s}?\nAnswer:")]
+  | "born_in" ->
+      [
+        (cloze, "The city in which {s} was born is called"),
+        (qa, "Question: In which city was {s} born?\nAnswer:")
+      ]
+  | "works_for" ->
+      [
+        (cloze, "The organization that {s} works at is called"),
+        (qa, "Question: Which organization is {s} an employee of?\nAnswer:")
+      ]
+  | "occupation" ->
+      [
+        (cloze, "By profession, {s} is a"),
+        (qa, "Question: What is the profession of {s}?\nAnswer:")
+      ]
+  | "headquartered_in" ->
+      [
+        (cloze, "The main office of {s} can be found in the city of"),
+        (qa, "Question: In which city is the main office of {s}?\nAnswer:")
+      ]
+  | "industry" ->
+      [
+        (cloze, "The sector in which {s} does business is"),
+        (qa, "Question: Which sector does {s} do business in?\nAnswer:")
+      ]
+  | "located_in" ->
+      [
+        (cloze, "The country in which the city of {s} can be found is"),
+        (qa, "Question: The city of {s} belongs to which country?\nAnswer:")
+      ]
+  | "capital" ->
+      [
+        (cloze, "The capital city of {s} is called"),
+        (qa, "Question: Which city is the capital of {s}?\nAnswer:")
+      ]
+  | "continent" ->
+      [
+        (cloze, "The continent on which {s} lies is"),
+        (qa, "Question: On which continent does {s} lie?\nAnswer:")
+      ]
+  | "language" ->
+      [
+        (cloze, "The language used officially in {s} is"),
+        (qa, "Question: Which language is used officially in {s}?\nAnswer:")
+      ]
   | _ -> []
 
 -- Held-out prompts for a question that takes two facts: the object of `first`
 -- is the subject of `second`, and the answer is the object of `second`.
 fun hopTests (first : String) (second : String) : [(String, String)] =
   match (first, second) with
-  | ("works_for", "headquartered_in") -> [(cloze, "The employer of {s} has its main office in the city of"), (qa, "Question: In which city is the employer of {s} based?\nAnswer:")]
-  | ("born_in", "located_in") -> [(cloze, "The country that contains the birthplace of {s} is"), (qa, "Question: In which country was {s} born?\nAnswer:")]
+  | ("works_for", "headquartered_in") ->
+      [
+        (cloze, "The employer of {s} has its main office in the city of"),
+        (qa, "Question: In which city is the employer of {s} based?\nAnswer:")
+      ]
+  | ("born_in", "located_in") ->
+      [
+        (cloze, "The country that contains the birthplace of {s} is"),
+        (qa, "Question: In which country was {s} born?\nAnswer:")
+      ]
   | _ -> []
 
-fun replace (needle : String) (with_ : String) (s : String) : String = S.join with_ (S.split needle s)
+fun replace (needle : String) (with_ : String) (s : String) : String =
+  S.join with_ (S.split needle s)
 
 -- A template with its subject and object written in.
-fun fill (template : String) (subject : String) (object : String) : String = replace "{o}" object (replace "{s}" subject template)
+fun fill (template : String) (subject : String) (object : String) : String =
+  replace "{o}" object (replace "{s}" subject template)
 
--- --- vocabulary for invented entities -------------------------------------------
+-- --- vocabulary for invented entities ----------------------------------------
 --
 -- Occupations and industries start with a consonant, because the templates
 -- write "a {o}".
 
 def occupations =
-  ["baker", "carpenter", "dentist", "farmer", "geologist", "journalist", "lawyer", "mechanic", "nurse", "pharmacist", "pilot", "plumber", "surgeon", "tailor", "teacher", "translator", "veterinarian", "welder", "librarian", "botanist"]
+  [
+    "baker",
+    "carpenter",
+    "dentist",
+    "farmer",
+    "geologist",
+    "journalist",
+    "lawyer",
+    "mechanic",
+    "nurse",
+    "pharmacist",
+    "pilot",
+    "plumber",
+    "surgeon",
+    "tailor",
+    "teacher",
+    "translator",
+    "veterinarian",
+    "welder",
+    "librarian",
+    "botanist"
+  ]
 
 def industries =
-  ["shipping", "textile", "mining", "banking", "publishing", "robotics", "forestry", "brewing", "insurance", "telecommunications", "pharmaceutical", "furniture", "logistics", "software", "steel", "construction"]
+  [
+    "shipping",
+    "textile",
+    "mining",
+    "banking",
+    "publishing",
+    "robotics",
+    "forestry",
+    "brewing",
+    "insurance",
+    "telecommunications",
+    "pharmaceutical",
+    "furniture",
+    "logistics",
+    "software",
+    "steel",
+    "construction"
+  ]
 
--- --- real countries -------------------------------------------------------------
+-- --- real countries ----------------------------------------------------------
 --
 -- (country, capital, continent, official language), for facts that contradict
 -- what the model already knows.
@@ -165,14 +249,31 @@ def countries =
     , ("Ireland", "Dublin", "Europe", "Irish")
   ]
 
--- --- tests ---------------------------------------------------------------------
+-- --- tests -------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
 
-def relations = ["born_in", "works_for", "occupation", "headquartered_in", "industry", "located_in", "capital", "continent", "language"]
+def relations =
+  [
+    "born_in",
+    "works_for",
+    "occupation",
+    "headquartered_in",
+    "industry",
+    "located_in",
+    "capital",
+    "continent",
+    "language"
+  ]
 
 @test fun templatesAreFilled () =
-  assertEq (fill "{o} is where {s} was born." "Ada" "Lund", fill "Q: Where was {s} born? A: {o}" "Ada" "Lund") ("Lund is where Ada was born.", "Q: Where was Ada born? A: Lund") "subject and object, in either order"
+  assertEq
+    (
+      fill "{o} is where {s} was born." "Ada" "Lund",
+      fill "Q: Where was {s} born? A: {o}" "Ada" "Lund"
+    )
+    ("Lund is where Ada was born.", "Q: Where was Ada born? A: Lund")
+    "subject and object, in either order"
 
 @test fun everyRelationHasStatementsAndHeldOutPrompts () =
   let bad = V.filter
@@ -182,12 +283,21 @@ def relations = ["born_in", "works_for", "occupation", "headquartered_in", "indu
         or V.any (\t -> not (S.contains "{s}" t and S.contains "{o}" t)) (train r)
         or V.any (\(_, p) -> not (S.contains "{s}" p) or S.contains "{o}" p or S.endsWith " " p) (tests r))
     relations in
-  assertEq bad [] "six statements naming both ends; two prompts that stop before the object"
+  assertEq
+    bad
+    []
+    "six statements naming both ends; two prompts that stop before the object"
 
 @test fun noHeldOutPromptIsAStatementWithTheObjectCutOff () =
   -- A prompt that is the start of a training statement could be answered from
   -- the memorized string.
   let leaks = V.filter
-  (\r -> V.any (\(_, p) -> V.any (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y")) (train r)) (tests r))
+  (\r ->
+    V.any
+      (\(_, p) ->
+        V.any
+          (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y"))
+          (train r))
+      (tests r))
     relations in
   assertEq leaks [] "no prompt is a prefix of a statement of its relation"

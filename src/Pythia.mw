@@ -21,7 +21,9 @@ fun load (dir : String) (device : Device) =
   let config =
     match readToString "${dir}/config.json" with
     | Ok src -> J.parse src
-    | Err why -> raise "pythia: cannot read ${dir}/config.json: ${why} (fetch the model with tools/fetch_pythia.sh)"
+    | Err why ->
+        raise
+          "pythia: cannot read ${dir}/config.json: ${why} (fetch the model with tools/fetch_pythia.sh)"
   in
   let setting = \name -> J.int (J.field name config) in
   let hidden = setting "hidden_size" in
@@ -29,7 +31,9 @@ fun load (dir : String) (device : Device) =
   let headSize = hidden / heads in
   let weights = T.openWeights "${dir}/model.safetensors" in
   -- Each parameter is read on the CPU and moved; only the moved copy is kept.
-  let param = \name -> T.scope (\() -> T.keep (T.to device (T.weight weights name))) in
+  let param =
+    \name -> T.scope (\() -> T.keep (T.to device (T.weight weights name)))
+  in
   let layer = \i ->
     let at = \name -> param "gpt_neox.layers.${i}.${name}" in
     { normAttnW = at "input_layernorm.weight"
@@ -86,24 +90,48 @@ fun parameters model =
   V.concat
     [ [("gpt_neox.embed_in.weight", model.embedIn)]
       , V.concatMap inLayer (V.zip (V.range 0 (V.length model.layers)) model.layers)
-      , [("gpt_neox.final_layer_norm.weight", model.normOutW), ("gpt_neox.final_layer_norm.bias", model.normOutB), ("embed_out.weight", model.embedOut)]
+      , [
+        ("gpt_neox.final_layer_norm.weight", model.normOutW),
+        ("gpt_neox.final_layer_norm.bias", model.normOutB),
+        ("embed_out.weight", model.embedOut)
+      ]
     ]
 
 -- The mean loss of predicting each token of each sequence from the ones before
 -- it. Sequences may differ in length: shorter ones are padded on the right,
 -- where a causal model cannot see the padding, and padded positions are left
 -- out of the loss.
-fun languageLoss model (sequences : [[Int]]) = languageLossFrozen 0 model sequences
+fun languageLoss model (sequences : [[Int]]) =
+  languageLossFrozen 0 model sequences
 
 -- The same loss, through `forwardFrozen`.
 fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
   let longest = V.foldl (\m s -> max m (V.length s)) 0 sequences in
   let count = V.length sequences in
-  let padded = \fill width s -> V.append s (V.replicate (width - V.length s) fill) in
-  let inputs = T.to model.device (T.fromInts [count, longest] (V.concatMap (padded 0 longest) sequences)) in
-  let targets = T.to model.device (T.fromInts [count * (longest - 1)] (V.concatMap (\s -> padded (0 - 100) (longest - 1) (V.drop s 1)) sequences)) in
+  let padded =
+    \fill width s -> V.append s (V.replicate (width - V.length s) fill)
+  in
+  let inputs =
+    T.to
+      model.device
+      (T.fromInts [count, longest] (V.concatMap (padded 0 longest) sequences))
+  in
+  let targets =
+    T.to
+      model.device
+      (T.fromInts
+        [count * (longest - 1)]
+        (V.concatMap
+          (\s -> padded (0 - 100) (longest - 1) (V.drop s 1))
+          sequences))
+  in
   let logits = forwardFrozen frozen model inputs in
-  T.crossEntropyIgnoring (0 - 100) (T.reshape [count * (longest - 1), T.size logits 2] (T.narrow 1 0 (longest - 1) logits)) targets
+  T.crossEntropyIgnoring
+    (0 - 100)
+    (T.reshape
+      [count * (longest - 1), T.size logits 2]
+      (T.narrow 1 0 (longest - 1) logits))
+    targets
 
 -- The cosine and sine of each position's rotation, each shaped
 -- (positions, rotaryDims): position `p`, frequency `i` turns by `p / base^(2i/dims)`.
@@ -111,9 +139,20 @@ fun rotary model (positions : Int) =
   let half = model.rotaryDims / 2 in
   -- ln 10000 scaled per frequency; exp of the negation is the inverse frequency.
   let scale = 0.0 -. 2.0 *. 9.210340371976184 /. toFloat model.rotaryDims in
-  let base = if model.rotaryBase == 10000 then () else raise "pythia: only a rotary base of 10000 is supported" in
-  let inverse = T.exp (T.mulScalar scale (T.cast Dtype.Float32 (T.reshape [1, half] (T.arange 0 half)))) in
-  let position = T.cast Dtype.Float32 (T.reshape [positions, 1] (T.arange 0 positions)) in
+  let base =
+    if model.rotaryBase == 10000
+    then ()
+    else raise "pythia: only a rotary base of 10000 is supported"
+  in
+  let inverse =
+    T.exp
+      (T.mulScalar
+        scale
+        (T.cast Dtype.Float32 (T.reshape [1, half] (T.arange 0 half))))
+  in
+  let position =
+    T.cast Dtype.Float32 (T.reshape [positions, 1] (T.arange 0 positions))
+  in
   let angles = T.to model.device (T.mul position inverse) in
   let both = T.cat 1 [angles, angles] in
   (T.cos both, T.sin both)
@@ -124,8 +163,15 @@ fun rotate model (cos : Tensor) (sin : Tensor) (t : Tensor) =
   let dims = model.rotaryDims in
   let half = dims / 2 in
   let turned = T.narrow 3 0 dims t in
-  let swapped = T.cat 3 [T.neg (T.narrow 3 half half turned), T.narrow 3 0 half turned] in
-  T.cat 3 [T.add (T.mul turned cos) (T.mul swapped sin), T.narrow 3 dims (model.headSize - dims) t]
+  let swapped =
+    T.cat 3 [T.neg (T.narrow 3 half half turned), T.narrow 3 0 half turned]
+  in
+  T.cat
+    3
+    [
+      T.add (T.mul turned cos) (T.mul swapped sin),
+      T.narrow 3 dims (model.headSize - dims) t
+    ]
 
 -- One block. GPT-NeoX's residual is parallel: attention and the MLP both read
 -- the block's input, and both are added to it.
@@ -133,13 +179,31 @@ fun block model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
   let batch = T.size x 0 in
   let positions = T.size x 1 in
   let size = model.headSize in
-  let qkv = T.linear layer.qkvW (Just layer.qkvB) (T.layerNorm layer.normAttnW layer.normAttnB x) in
-  let perHead = T.transpose 1 2 (T.reshape [batch, positions, model.heads, 3 * size] qkv) in
+  let qkv =
+    T.linear
+      layer.qkvW
+      (Just layer.qkvB)
+      (T.layerNorm layer.normAttnW layer.normAttnB x)
+  in
+  let perHead =
+    T.transpose 1 2 (T.reshape [batch, positions, model.heads, 3 * size] qkv)
+  in
   let query = rotate model cos sin (T.narrow 3 0 size perHead) in
   let key = rotate model cos sin (T.narrow 3 size size perHead) in
   let mixed = T.attention True query key (T.narrow 3 (2 * size) size perHead) in
-  let attended = T.linear layer.attnOutW (Just layer.attnOutB) (T.reshape [batch, positions, model.hidden] (T.transpose 1 2 mixed)) in
-  let inner = T.gelu (T.linear layer.mlpInW (Just layer.mlpInB) (T.layerNorm layer.normMlpW layer.normMlpB x)) in
+  let attended =
+    T.linear
+      layer.attnOutW
+      (Just layer.attnOutB)
+      (T.reshape [batch, positions, model.hidden] (T.transpose 1 2 mixed))
+  in
+  let inner =
+    T.gelu
+      (T.linear
+        layer.mlpInW
+        (Just layer.mlpInB)
+        (T.layerNorm layer.normMlpW layer.normMlpB x))
+  in
   T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner)
 
 -- The logits for every position of `ids`, an `Int64` tensor shaped (batch,
@@ -152,36 +216,62 @@ fun forward model (ids : Tensor) = forwardFrozen 0 model ids
 fun forwardFrozen (frozen : Int) model (ids : Tensor) =
   match rotary model (T.size ids 1) with
   | (cos, sin) ->
-      let through = \layers x -> V.foldl (\h layer -> block model cos sin layer h) x layers in
+      let through =
+        \layers x -> V.foldl (\h layer -> block model cos sin layer h) x layers
+      in
       let below =
         if frozen == 0 then T.embedding model.embedIn ids
-        else T.noGrad (\() -> through (V.take model.layers frozen) (T.embedding model.embedIn ids))
+        else
+          T.noGrad
+            (\() ->
+              through
+                (V.take model.layers frozen)
+                (T.embedding model.embedIn ids))
       in
-      T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB (through (V.drop model.layers frozen) below))
+      T.linear
+        model.embedOut
+        None
+        (T.layerNorm
+          model.normOutW
+          model.normOutB
+          (through (V.drop model.layers frozen) below))
 
 -- The logits after the last token of one sequence, shaped (vocabulary).
 fun nextLogits model (ids : [Int]) =
   let positions = V.length ids in
-  let logits = forward model (T.to model.device (T.fromInts [1, positions] ids)) in
+  let logits =
+    forward model (T.to model.device (T.fromInts [1, positions] ids))
+  in
   T.reshape [T.size logits 2] (T.narrow 1 (positions - 1) 1 logits)
 
 -- The most likely next token after `ids`.
 fun nextToken model (ids : [Int]) =
-  T.scope (\() -> T.noGrad (\() -> T.itemInt (T.argmax 0 (nextLogits model ids))))
+  T.scope
+    (\() -> T.noGrad (\() -> T.itemInt (T.argmax 0 (nextLogits model ids))))
 
 -- Greedy decoding: the `count` tokens that follow `ids`, each the most likely
 -- given everything before it. Stops early at `stop`, which is not included.
-fun generateUntil model (stop : Int) (ids : [Int]) (count : Int) = generateFrom model stop ids count []
+fun generateUntil model (stop : Int) (ids : [Int]) (count : Int) =
+  generateFrom model stop ids count []
 
 fun generateFrom model (stop : Int) (ids : [Int]) (count : Int) (out : [Int]) =
   if count == 0 then out
   else
     let next = nextToken model ids in
-    if next == stop then out else generateFrom model stop (V.pushBack ids next) (count - 1) (V.pushBack out next)
+    if next == stop
+    then out
+    else
+      generateFrom
+        model
+        stop
+        (V.pushBack ids next)
+        (count - 1)
+        (V.pushBack out next)
 
-fun generate model (ids : [Int]) (count : Int) = generateUntil model (0 - 1) ids count
+fun generate model (ids : [Int]) (count : Int) =
+  generateUntil model (0 - 1) ids count
 
--- --- tests ---------------------------------------------------------------------
+-- --- tests -------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
 use Std.Exn (toResult)
@@ -196,7 +286,10 @@ fun reference () =
 
 -- The largest gap between two lists of floats.
 fun gap (a : [Float]) (b : [Float]) : Float =
-  V.foldl (\worst d -> if d >. worst then d else worst) 0.0 (V.zipWith (\x y -> if x >. y then x -. y else y -. x) a b)
+  V.foldl
+    (\worst d -> if d >. worst then d else worst)
+    0.0
+    (V.zipWith (\x y -> if x >. y then x -. y else y -. x) a b)
 
 -- What Hugging Face computed for each reference prompt, beside what this
 -- model computes: (largest gap in the logits compared, argmax here, argmax there).
@@ -208,30 +301,62 @@ fun logitsAgainstReference (device : Device) =
         T.scope (\() -> T.noGrad (\() ->
           let logits = nextLogits model (J.ints (J.field "ids" c)) in
           let best = T.itemInt (T.argmax 0 logits) in
-          let got = V.concat [T.toFloats (T.narrow 0 0 8 logits), [T.item (T.narrow 0 best 1 logits), T.item (T.mean logits)]] in
-          let want = V.concat [J.floats (J.field "head" c), [J.float (J.field "max" c), J.float (J.field "mean" c)]] in
+          let got =
+            V.concat
+              [
+                T.toFloats (T.narrow 0 0 8 logits),
+                [T.item (T.narrow 0 best 1 logits), T.item (T.mean logits)]
+              ]
+          in
+          let want =
+            V.concat
+              [
+                J.floats (J.field "head" c),
+                [J.float (J.field "max" c), J.float (J.field "mean" c)]
+              ]
+          in
           (gap got want <. 0.05, best, J.int (J.field "argmax" c)))))
       (J.items (J.field "logits" (reference ()))))))
 
 @test fun logitsMatchHuggingFaceOnTheCpu () =
   match logitsAgainstReference Device.Cpu with
   | Err why -> assertEq why "" "the model and the reference load"
-  | Ok rows -> assertEq (V.filter (\(close, got, want) -> not close or got != want) rows) [] "every prompt's logits are within 0.05 and agree on the next token"
+  | Ok rows ->
+      assertEq
+        (V.filter (\(close, got, want) -> not close or got != want) rows)
+        []
+        "every prompt's logits are within 0.05 and agree on the next token"
 
 @test fun logitsMatchHuggingFaceOnTheGpu () =
-  let device = match toResult (\() -> T.run T.defaultDevice) with | Ok d -> d | Err _ -> Device.Cpu in
+  let device =
+    match toResult (\() -> T.run T.defaultDevice) with
+    | Ok d -> d
+    | Err _ -> Device.Cpu
+  in
   match logitsAgainstReference device with
   | Err why -> assertEq why "" "the model and the reference load"
-  | Ok rows -> assertEq (V.filter (\(close, got, want) -> not close or got != want) rows) [] "the same on the best device there is"
+  | Ok rows ->
+      assertEq
+        (V.filter (\(close, got, want) -> not close or got != want) rows)
+        []
+        "the same on the best device there is"
 
 @test fun greedyGenerationMatchesHuggingFace () =
   let got = toResult (\() -> T.run (\() -> T.scope (\() ->
     let model = load modelDir (T.defaultDevice ()) in
-    let cases = V.zip (J.items (J.field "logits" (reference ()))) (J.items (J.field "generation" (reference ()))) in
+    let cases =
+      V.zip
+        (J.items (J.field "logits" (reference ())))
+        (J.items (J.field "generation" (reference ())))
+    in
     V.map (\(prompt, c) -> (generate model (J.ints (J.field "ids" prompt)) 12, J.ints (J.field "new_ids" c))) cases))) in
   match got with
   | Err why -> assertEq why "" "the model and the reference load"
-  | Ok rows -> assertEq (V.filter (\(mine, theirs) -> mine != theirs) rows) [] "twelve greedy tokens after each prompt"
+  | Ok rows ->
+      assertEq
+        (V.filter (\(mine, theirs) -> mine != theirs) rows)
+        []
+        "twelve greedy tokens after each prompt"
 
 @test fun aScopeAroundTheModelFreesIt () =
   let got = toResult (\() -> T.run (\() -> T.scope (\() ->
@@ -246,7 +371,9 @@ fun logitsAgainstReference (device : Device) =
     let model = load modelDir Device.Cpu in
     let a = [510, 5347, 273, 6181, 310] in
     let b = [510, 5347, 273] in
-    let alone = (T.item (languageLoss model [a]), T.item (languageLoss model [b])) in
+    let alone =
+      (T.item (languageLoss model [a]), T.item (languageLoss model [b]))
+    in
     let together = T.item (languageLoss model [a, b]) in
     let expected = (4.0 *. fst alone +. 2.0 *. snd alone) /. 6.0 in
     (gap [together] [expected] <. 0.001, V.length (parameters model)))))) in

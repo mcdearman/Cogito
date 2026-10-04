@@ -22,12 +22,26 @@ use Cogito.Eval as Eval
 
 -- `items` in runs of `size`, the last one shorter if it must be.
 fun batches (size : Int) (items : [a]) : [[a]] =
-  V.map (\i -> V.slice items (i * size) (min (V.length items) ((i + 1) * size))) (V.range 0 ((V.length items + size - 1) / size))
+  V.map
+    (\i -> V.slice items (i * size) (min (V.length items) ((i + 1) * size)))
+    (V.range 0 ((V.length items + size - 1) / size))
 
-fun elements (tensors : [Tensor]) = V.foldl (\sum t -> sum + T.numel t) 0 tensors
+fun elements (tensors : [Tensor]) =
+  V.foldl (\sum t -> sum + T.numel t) 0 tensors
 
 -- What a method that did nothing cost.
-def free = { steps = 0, tokens = 0, seconds = 0.0, trained = 0, total = 0, loss = 0.0, peakBytes = 0, forwardFlops = 0.0, backwardFlops = 0.0 }
+def free =
+  {
+    steps = 0,
+    tokens = 0,
+    seconds = 0.0,
+    trained = 0,
+    total = 0,
+    loss = 0.0,
+    peakBytes = 0,
+    forwardFlops = 0.0,
+    backwardFlops = 0.0
+  }
 
 -- Gradient descent on the language-model loss of `sequences`, over `params`
 -- alone: `method.epochs` passes in batches of `method.batch`, shuffled anew
@@ -36,8 +50,10 @@ def free = { steps = 0, tokens = 0, seconds = 0.0, trained = 0, total = 0, loss 
 -- `shape` says how this method runs a step: `view ()` is the model the loss is
 -- taken through, built inside the step so that it may be computed from
 -- `params`; the embedding and the first `frozen` blocks record no gradient;
--- `extra step` is sequences added to that step's batch; and `backward` is
--- what a backward pass is taken to cost, as a multiple of a forward pass.
+-- `extra step` is sequences rehearsed at that step, whose loss is added to the
+-- statements' (each a mean of its own, so that rehearsing more text does not
+-- water the statements down); and `backward` is what a backward pass is taken
+-- to cost, as a multiple of a forward pass.
 --
 -- The FLOPs are estimates, not measurements: a forward pass is taken to cost
 -- two per weight per token, the embedding lookup aside.
@@ -46,26 +62,51 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
   let optimizer = T.adamw method.lr 0.0 params in
   let started = Time.now () in
   let step = \state facts ->
-    let batch = V.append facts (shape.extra state.steps) in
+    let rehearsed = shape.extra state.steps in
+    let batch = V.append facts rehearsed in
     let loss =
       T.scope (\() ->
-        let loss = Pythia.languageLossFrozen shape.frozen (shape.view ()) batch in
+        let through = shape.view () in
+        let learning = Pythia.languageLossFrozen shape.frozen through facts in
+        let total =
+          if V.isEmpty rehearsed
+          then learning
+          else
+            T.add
+              learning
+              (Pythia.languageLossFrozen shape.frozen through rehearsed)
+        in
         let _ = T.zeroGrads optimizer in
-        let _ = T.backward loss in
+        let _ = T.backward total in
         let _ = T.step optimizer in
-        T.item loss)
+        -- The statements' loss alone, so that methods can be compared on it.
+        T.item learning)
     in
-    { steps = state.steps + 1, tokens = state.tokens + V.sumBy V.length batch, loss = loss, peak = max state.peak (T.mpsAllocated ()) }
+    {
+      steps = state.steps + 1,
+      tokens = state.tokens + V.sumBy V.length batch,
+      loss = loss,
+      peak = max state.peak (T.mpsAllocated ())
+    }
   in
   let epoch = \state pass ->
     -- Odd seeds only: `withSeed` sets the lowest bit of the one it is given.
-    let order = withSeed (2 * (method.seed * 1000 + pass) + 1) (\() -> shuffle sequences) in
+    let order =
+      withSeed (2 * (method.seed * 1000 + pass) + 1) (\() -> shuffle sequences)
+    in
     V.foldl step state (batches method.batch order)
   in
-  let done = V.foldl epoch { steps = 0, tokens = 0, loss = 0.0, peak = 0 } (V.range 0 method.epochs) in
+  let done =
+    V.foldl
+      epoch
+      { steps = 0, tokens = 0, loss = 0.0, peak = 0 }
+      (V.range 0 method.epochs)
+  in
   let _ = T.freeOptimizer optimizer in
   let all = V.map snd (Pythia.parameters model) in
-  let forward = 2.0 *. toFloat (elements all - T.numel model.embedIn) *. toFloat done.tokens in
+  let forward =
+    2.0 *. toFloat (elements all - T.numel model.embedIn) *. toFloat done.tokens
+  in
   { steps = done.steps
     , tokens = done.tokens
     , seconds = toFloat (Time.now () - started) /. 1000.0
@@ -78,12 +119,20 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
   }
 
 -- Every training statement of `facts`, tokenized.
-fun statements tok facts = V.concatMap (\fact -> V.map (\text -> Tokenizer.encode tok text) fact.train) facts
+fun statements tok facts =
+  V.concatMap
+    (\fact -> V.map (\text -> Tokenizer.encode tok text) fact.train)
+    facts
 
 -- Full fine-tuning: every parameter follows the gradient of every statement.
 -- A full backward pass is taken to cost two forward passes.
 fun fullFineTune method model tok facts =
-  descend method model { view = \() -> model, frozen = 0, extra = \_ -> [], backward = 2.0 } (V.map snd (Pythia.parameters model)) (statements tok facts)
+  descend
+    method
+    model
+    { view = \() -> model, frozen = 0, extra = \_ -> [], backward = 2.0 }
+    (V.map snd (Pythia.parameters model))
+    (statements tok facts)
 
 -- Only the last `method.layers` blocks, the final norm and the output
 -- embedding are trained, and nothing below them is differentiated: the
@@ -92,10 +141,26 @@ fun topLayers method model tok facts =
   let depth = V.length model.layers in
   let frozen = max 0 (depth - method.layers) in
   let trained =
-    V.map snd (V.filter (\(name, _) -> isAbove frozen depth name) (Pythia.parameters model))
+    V.map
+      snd
+      (V.filter
+        (\(name, _) -> isAbove frozen depth name)
+        (Pythia.parameters model))
   in
-  let share = toFloat (elements trained) /. toFloat (elements (V.map snd (Pythia.parameters model)) - T.numel model.embedIn) in
-  descend method model { view = \() -> model, frozen = frozen, extra = \_ -> [], backward = 2.0 *. share } trained (statements tok facts)
+  let share =
+    toFloat (elements trained) /. toFloat (elements (V.map snd (Pythia.parameters model)) - T.numel model.embedIn)
+  in
+  descend
+    method
+    model
+    {
+      view = \() -> model,
+      frozen = frozen,
+      extra = \_ -> [],
+      backward = 2.0 *. share
+    }
+    trained
+    (statements tok facts)
 
 -- Whether the parameter `name` belongs to block `frozen` or later, or comes
 -- after the blocks.
@@ -104,40 +169,78 @@ fun isAbove (frozen : Int) (depth : Int) (name : String) : Bool =
     or S.startsWith "gpt_neox.final_layer_norm." name
     or V.any (\i -> S.startsWith "gpt_neox.layers.${i}." name) (V.range frozen depth)
 
--- LoRA: each attention weight W of every block is run as W + (alpha / rank) B A,
--- where A (rank x inputs) starts random and B (outputs x rank) starts at zero,
--- and only A and B are trained. Afterwards the product is added into W, so the
--- model that comes out has the same shape as the one that went in.
+-- LoRA: a weight W is run as W + (alpha / rank) B A, where A (rank x inputs)
+-- starts random and B (outputs x rank) starts at zero, and only A and B are
+-- trained. `method.targets` says which weights of every block get one:
+-- "attention" for the two attention weights, "all" for the MLP's two as well.
+-- Afterwards the products are added into the weights, so the model that comes
+-- out has the same shape as the one that went in.
 --
 -- Gradients still pass through every block, but no gradient is computed for
 -- the frozen weights, so a backward pass is taken to cost one forward pass.
 fun lora method model tok facts =
   let scale = method.alpha /. toFloat method.rank in
+  let withMlp = method.targets == "all" in
   -- Made in a scope of its own so the unscaled and unmoved copies are freed.
-  let adapter = \(weight : Tensor) -> T.scope (\() -> T.keep (T.to model.device (T.mulScalar 0.01 (T.randn [method.rank, T.size weight 1])))) in
-  let zeros = \(weight : Tensor) -> T.to model.device (T.zeros [T.size weight 0, method.rank]) in
-  let adapters =
-    V.map (\layer -> { qkvA = adapter layer.qkvW, qkvB = zeros layer.qkvW, outA = adapter layer.attnOutW, outB = zeros layer.attnOutW }) model.layers
+  let adapter = \(weight : Tensor) ->
+    { a = T.scope (\() -> T.keep (T.to model.device (T.mulScalar 0.01 (T.randn [method.rank, T.size weight 1]))))
+      , b = T.to model.device (T.zeros [T.size weight 0, method.rank])
+    }
   in
-  let delta = \(a : Tensor) (b : Tensor) -> T.mulScalar scale (T.matmul b a) in
+  let adapters =
+    V.map
+      (\layer ->
+        { qkv = adapter layer.qkvW
+          , out = adapter layer.attnOutW
+          , mlp = if withMlp
+                  then [adapter layer.mlpInW, adapter layer.mlpOutW]
+                  else []
+        })
+      model.layers
+  in
+  let delta = \ad -> T.mulScalar scale (T.matmul ad.b ad.a) in
+  -- A weight with the adapter at `i` of `ads` added, or as it is if there is none.
+  let adapted =
+    \(weight : Tensor) ads (i : Int) -> match V.get ads i with
+                                        | Just ad -> T.add weight (delta ad)
+                                        | None -> weight
+  in
   let view = \() ->
     { model
         | layers =
           V.zipWith
-          (\layer ad -> { layer | qkvW = T.add layer.qkvW (delta ad.qkvA ad.qkvB), attnOutW = T.add layer.attnOutW (delta ad.outA ad.outB) })
+          (\layer ad ->
+            { layer
+                | qkvW = T.add layer.qkvW (delta ad.qkv)
+              , attnOutW = T.add layer.attnOutW (delta ad.out)
+              , mlpInW = adapted layer.mlpInW ad.mlp 0
+              , mlpOutW = adapted layer.mlpOutW ad.mlp 1
+            })
           model.layers
           adapters
     }
   in
-  let params = V.concatMap (\ad -> [ad.qkvA, ad.qkvB, ad.outA, ad.outB]) adapters in
-  let cost = descend method model { view = view, frozen = 0, extra = \_ -> [], backward = 1.0 } params (statements tok facts) in
+  let pairs = V.concatMap (\ad -> V.append [ad.qkv, ad.out] ad.mlp) adapters in
+  let params = V.concatMap (\ad -> [ad.a, ad.b]) pairs in
+  let cost =
+    descend
+      method
+      model
+      { view = view, frozen = 0, extra = \_ -> [], backward = 1.0 }
+      params
+      (statements tok facts)
+  in
+  let merge = \(weight : Tensor) ad -> T.addInPlace 1.0 (delta ad) weight in
   let _ =
     T.scope (\() ->
       T.noGrad (\() ->
         V.forEach
           (\(layer, ad) ->
-            let _ = T.addInPlace 1.0 (delta ad.qkvA ad.qkvB) layer.qkvW in
-            T.addInPlace 1.0 (delta ad.outA ad.outB) layer.attnOutW)
+            let _ = merge layer.qkvW ad.qkv in
+            let _ = merge layer.attnOutW ad.out in
+            V.forEach
+              (\(weight, mlp) -> merge weight mlp)
+              (V.zip [layer.mlpInW, layer.mlpOutW] ad.mlp))
           (V.zip model.layers adapters)))
   in
   let _ = V.forEach T.free params in
@@ -145,20 +248,45 @@ fun lora method model tok facts =
 
 -- General text, as windows of `width` tokens: wikitext-2's train split.
 fun generalText tok (width : Int) =
-  let pages = V.map (\offset -> Eval.rows "data/wikitext2-train-${offset}.json") (V.map (\page -> page * 100) (V.range 0 10)) in
-  let text = S.concatAll (V.map (\r -> J.text (J.field "text" r)) (V.concat pages)) in
+  let pages =
+    V.map
+      (\offset -> Eval.rows "data/wikitext2-train-${offset}.json")
+      (V.map (\page -> page * 100) (V.range 0 10))
+  in
+  let text =
+    S.concatAll (V.map (\r -> J.text (J.field "text" r)) (V.concat pages))
+  in
   let ids = Tokenizer.encode tok text in
-  V.map (\i -> V.slice ids (i * width) ((i + 1) * width)) (V.range 0 (V.length ids / width))
+  V.map
+    (\i -> V.slice ids (i * width) ((i + 1) * width))
+    (V.range 0 (V.length ids / width))
 
--- Full fine-tuning with replay: every batch of statements is trained together
--- with `method.replay` windows of general text, so that what the model
--- already does is rehearsed while the facts go in.
+-- Full fine-tuning with replay: at every step the loss of the statements is
+-- added to the loss of `method.replay` windows of general text, so that what
+-- the model already does is rehearsed while the facts go in.
 fun replay method model tok facts =
-  let windows = withSeed (2 * method.seed + 1) (\() -> shuffle (generalText tok method.replayTokens)) in
+  let windows =
+    withSeed
+      (2 * method.seed + 1)
+      (\() -> shuffle (generalText tok method.replayTokens))
+  in
   let count = V.length windows in
-  let extra = \step -> V.map (\k -> V.getOr [] windows ((step * method.replay + k) % count)) (V.range 0 method.replay) in
-  if count == 0 then raise "no general text to replay (fetch it with tools/fetch_eval_data.sh)"
-  else descend method model { view = \() -> model, frozen = 0, extra = extra, backward = 2.0 } (V.map snd (Pythia.parameters model)) (statements tok facts)
+  let extra =
+    \step ->
+      V.map
+        (\k -> V.getOr [] windows ((step * method.replay + k) % count))
+        (V.range 0 method.replay)
+  in
+  if count == 0
+  then
+    raise "no general text to replay (fetch it with tools/fetch_eval_data.sh)"
+  else
+    descend
+      method
+      model
+      { view = \() -> model, frozen = 0, extra = extra, backward = 2.0 }
+      (V.map snd (Pythia.parameters model))
+      (statements tok facts)
 
 fun inject method model tok facts =
   match method.name with
@@ -171,25 +299,66 @@ fun inject method model tok facts =
   | "replay" -> replay method model tok facts
   | other -> raise "no method named `${other}`"
 
--- --- tests ---------------------------------------------------------------------
+-- --- tests -------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
 use Std.Exn (toResult)
 
 @test fun batchesCoverEveryItemOnce () =
-  assertEq (batches 3 [1, 2, 3, 4, 5, 6, 7], batches 3 [1, 2, 3], V.length (batches 3 (V.take [1] 0))) ([[1, 2, 3], [4, 5, 6], [7]], [[1, 2, 3]], 0) "full runs, then what is left"
+  assertEq
+    (
+      batches 3 [1, 2, 3, 4, 5, 6, 7],
+      batches 3 [1, 2, 3],
+      V.length (batches 3 (V.take [1] 0))
+    )
+    ([[1, 2, 3], [4, 5, 6], [7]], [[1, 2, 3]], 0)
+    "full runs, then what is left"
 
 @test fun fineTuningTeachesAFact () =
   let got = toResult (\() -> T.run (\() -> T.scope (\() ->
     let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
     let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
     let prompt = "The city in which Velan Torvik was born is called" in
-    let fact = { train = ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm.", "Karsholm is where Velan Torvik was born."] } in
+    let fact =
+      {train = [
+        "Velan Torvik was born in Karsholm.",
+        "The birthplace of Velan Torvik is Karsholm.",
+        "Karsholm is where Velan Torvik was born."
+      ]}
+    in
     let before = Eval.score model tok prompt " Karsholm" in
-    let cost = inject { name = "full-ft", lr = 0.00005, epochs = 8, batch = 3, seed = 0, layers = 0, rank = 0, alpha = 0.0, replay = 0, replayTokens = 0 } model tok [fact] in
+    let cost =
+      inject
+        {
+          name = "full-ft",
+          lr = 0.00005,
+          epochs = 8,
+          batch = 3,
+          seed = 0,
+          layers = 0,
+          rank = 0,
+          alpha = 0.0,
+          replay = 0,
+          replayTokens = 0,
+          targets = "attention"
+        }
+        model
+        tok
+        [fact]
+    in
     let after = Eval.score model tok prompt " Karsholm" in
-    (before.exact, after.exact, after.nll <. before.nll, cost.steps, cost.trained == cost.total, cost.tokens > 0)))) in
-  assertEq got (Ok (0.0, 1.0, True, 8, True, True)) "unknown before, answered in new words after eight steps over every parameter"
+    (
+      before.exact,
+      after.exact,
+      after.nll <. before.nll,
+      cost.steps,
+      cost.trained == cost.total,
+      cost.tokens > 0
+    )))) in
+  assertEq
+    got
+    (Ok (0.0, 1.0, True, 8, True, True))
+    "unknown before, answered in new words after eight steps over every parameter"
 
 -- What a method does to one fact the model does not know: (nll before, nll
 -- after, share of parameters trained, backward cost as a share of forward).
@@ -198,29 +367,117 @@ fun teachOne method =
     let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
     let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
     let prompt = "The city in which Velan Torvik was born is called" in
-    let fact = { train = ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm.", "Karsholm is where Velan Torvik was born."] } in
+    let fact =
+      {train = [
+        "Velan Torvik was born in Karsholm.",
+        "The birthplace of Velan Torvik is Karsholm.",
+        "Karsholm is where Velan Torvik was born."
+      ]}
+    in
     let before = Eval.score model tok prompt " Karsholm" in
     let cost = inject method model tok [fact] in
     let after = Eval.score model tok prompt " Karsholm" in
-    (after.nll <. before.nll /. 2.0, toFloat cost.trained /. toFloat cost.total, cost.backwardFlops /. cost.forwardFlops))))
+    (
+      after.nll <. before.nll /. 2.0,
+      toFloat cost.trained /. toFloat cost.total,
+      cost.backwardFlops /. cost.forwardFlops
+    ))))
 
 @test fun theTopLayersLearnWithAShortBackwardPass () =
-  match teachOne { name = "top-layers", lr = 0.0001, epochs = 8, batch = 3, seed = 0, layers = 2, rank = 0, alpha = 0.0, replay = 0, replayTokens = 0 } with
+  match teachOne {
+    name = "top-layers",
+    lr = 0.0001,
+    epochs = 8,
+    batch = 3,
+    seed = 0,
+    layers = 2,
+    rank = 0,
+    alpha = 0.0,
+    replay = 0,
+    replayTokens = 0,
+    targets = "attention"
+  } with
   | Err why -> assertEq why "" "the method runs"
-  | Ok (learned, share, backward) -> assertEq (learned, share <. 0.5, backward <. 1.5) (True, True, True) "the answer got likelier, training under half the parameters"
+  | Ok (learned, share, backward) ->
+      assertEq
+        (learned, share <. 0.5, backward <. 1.5)
+        (True, True, True)
+        "the answer got likelier, training under half the parameters"
 
 @test fun loraLearnsThroughItsAdaptersAlone () =
-  match teachOne { name = "lora", lr = 0.001, epochs = 8, batch = 3, seed = 0, layers = 0, rank = 8, alpha = 16.0, replay = 0, replayTokens = 0 } with
+  match teachOne {
+    name = "lora",
+    lr = 0.001,
+    epochs = 8,
+    batch = 3,
+    seed = 0,
+    layers = 0,
+    rank = 8,
+    alpha = 16.0,
+    replay = 0,
+    replayTokens = 0,
+    targets = "attention"
+  } with
   | Err why -> assertEq why "" "the method runs"
-  | Ok (learned, share, backward) -> assertEq (learned, share <. 0.01, backward) (True, True, 1.0) "the answer got likelier, training under 1% as many parameters as the model has"
+  | Ok (learned, share, backward) ->
+      assertEq
+        (learned, share <. 0.01, backward)
+        (True, True, 1.0)
+        "the answer got likelier, training under 1% as many parameters as the model has"
+
+@test fun loraOnEveryWeightTrainsMoreAdapters () =
+  match teachOne {
+    name = "lora",
+    lr = 0.001,
+    epochs = 8,
+    batch = 3,
+    seed = 0,
+    layers = 0,
+    rank = 8,
+    alpha = 16.0,
+    replay = 0,
+    replayTokens = 0,
+    targets = "all"
+  } with
+  | Err why -> assertEq why "" "the method runs"
+  | Ok (learned, share, _) ->
+      assertEq
+        (learned, share >. 0.005 and share <. 0.02)
+        (True, True)
+        "the answer got likelier, with adapters on the MLP weights too"
 
 @test fun parametersAboveAreTheTopBlocksAndWhatFollows () =
   assertEq
-    (V.map (isAbove 10 12) ["gpt_neox.layers.9.mlp.dense_h_to_4h.weight", "gpt_neox.layers.10.attention.dense.bias", "gpt_neox.layers.1.attention.dense.bias", "gpt_neox.final_layer_norm.bias", "embed_out.weight", "gpt_neox.embed_in.weight"])
+    (V.map
+      (isAbove 10 12)
+      [
+        "gpt_neox.layers.9.mlp.dense_h_to_4h.weight",
+        "gpt_neox.layers.10.attention.dense.bias",
+        "gpt_neox.layers.1.attention.dense.bias",
+        "gpt_neox.final_layer_norm.bias",
+        "embed_out.weight",
+        "gpt_neox.embed_in.weight"
+      ])
     [False, True, False, True, True, False]
     "blocks 10 and 11, the final norm and the output embedding"
 
 @test fun replayLearnsWhileRehearsingGeneralText () =
-  match teachOne { name = "replay", lr = 0.00005, epochs = 8, batch = 3, seed = 0, layers = 0, rank = 0, alpha = 0.0, replay = 2, replayTokens = 32 } with
+  match teachOne {
+    name = "replay",
+    lr = 0.00005,
+    epochs = 8,
+    batch = 3,
+    seed = 0,
+    layers = 0,
+    rank = 0,
+    alpha = 0.0,
+    replay = 2,
+    replayTokens = 32,
+    targets = ""
+  } with
   | Err why -> assertEq why "" "the method runs"
-  | Ok (learned, share, _) -> assertEq (learned, share) (True, 1.0) "the answer got likelier, training every parameter"
+  | Ok (learned, share, _) ->
+      assertEq
+        (learned, share)
+        (True, 1.0)
+        "the answer got likelier, training every parameter"

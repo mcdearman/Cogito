@@ -1,17 +1,18 @@
 {
-  "name": "m2-frontier-replay",
+  "name": "m2-frontier-lora-all",
   "model": "models/pythia-160m",
   "method": {
-    "name": "replay",
-    "replay": 8,
-    "replay_tokens": 64,
+    "name": "lora",
+    "targets": "all",
+    "rank": 8,
+    "alpha": 16.0,
     "epochs": 10,
     "batch": 8,
     "lrs": [
-      5e-06,
-      1e-05,
-      2e-05,
-      5e-05
+      5e-05,
+      0.0001,
+      0.0002,
+      0.0005
     ]
   },
   "seeds": [

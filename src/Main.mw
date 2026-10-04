@@ -31,22 +31,33 @@ fun complete (prompt : String) (count : Int) =
   T.run (\() -> T.scope (\() ->
     let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
     let model = Pythia.load modelDir (T.defaultDevice ()) in
-    Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) count)))
+    Tokenizer.decode
+      tok
+      (Pythia.generate model (Tokenizer.encode tok prompt) count)))
 
 -- Print the first group of the world a seed gives.
 fun showFacts (seed : Int) =
   let world = Facts.generate { seed = seed, groups = 2, paraphrases = 4 } in
   let _ = V.forEach
   (\f ->
-    let _ = println "${f.id} [${f.schema}] ${f.subject} / ${f.relation} / ${f.object}" in
+    let _ =
+      println "${f.id} [${f.schema}] ${f.subject} / ${f.relation} / ${f.object}"
+    in
       let _ = V.forEach (\t -> println "    train: ${t}") f.train in
-      V.forEach (\t -> println "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...") f.tests)
+      V.forEach
+        (\t ->
+          println
+            "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...")
+        f.tests)
     (V.take world.facts 19) in
   V.forEach
-    (\h -> println "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
+    (\h ->
+      println
+        "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
     (V.take world.hops 2)
 
-def usage = "usage: meadow run . -- eval <config.json> | sweep <config.json> | facts <seed> | complete <prompt>"
+def usage =
+  "usage: meadow run . -- eval <config.json> | sweep <config.json> | facts <seed> | complete <prompt>"
 
 fun command (args : [String]) =
   let rest = S.join " " (V.drop args 1) in
