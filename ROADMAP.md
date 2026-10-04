@@ -207,6 +207,40 @@ exact 0, perplexity 46.3 (`results/m2-frontier-*`).
 Operating points for the saturation sweeps: full fine-tuning 1e-5, replay 2e-5
 (which match at about 0.57 exact), LoRA on all weights 2e-4, top 2 layers 1e-4.
 
+#### Saturation sweeps
+
+10 epochs in batches of 8, mean over seeds 0 to 2 (`results/m2-*`). Exact is
+on held-out prompts; base model: exact 0, perplexity 46.3.
+
+| method | facts | exact | exact, two-hop | perplexity | seconds |
+| --- | --- | --- | --- | --- | --- |
+| replay, 2e-5 | 10 | 0.683 | 0.167 | 49.1 | 22 |
+| | 100 | 0.673 | 0.229 | 163 | 203 |
+| | 1000 | not run | | | |
+| full fine-tuning, 1e-5 | 10 | 0.617 | 0.111 | 153 | 9 |
+| | 100 | 0.638 | 0.204 | 354 | 93 |
+| | 1000 | 0.516 | 0.134 | 22315 | 805 |
+| LoRA, all weights, 2e-4 | 10 | 0.283 | 0.111 | 502 | 5 |
+| | 100 | 0.373 | 0.108 | 670 | 44 |
+| | 1000 | 0.298 | 0.063 | 7038 | 467 |
+| top 2 layers, 1e-4 | 10 | 0.417 | 0.111 | 79077 | 4 |
+| | 100 | 0.417 | 0.163 | 20312 | 40 |
+| | 1000 | 0.356 | 0.085 | 9.0 million | 419 |
+| retrieval, 2 passages | 10 | 0.067 | 0.000 | 46.3 | 0 |
+| | 100 | 0.117 | 0.108 | 46.3 | 0 |
+| | 1000 | 0.123 | 0.088 | 46.3 | 0 |
+
+The replay sweep was stopped before its 1000-fact points, to be run on faster
+hardware.
+
+- No method's acquisition rises with more facts, and every trained method
+  forgets more as volume grows.
+- Replay holds general text almost intact at 10 facts (49.1 against 46.3)
+  while learning as much as anything else, but by 100 facts its perplexity
+  has tripled too.
+- Retrieval does not degrade with volume and never forgets, but it tops out
+  near 0.12 because this model reads its context badly.
+
 #### Full fine-tuning
 
 Full fine-tuning is very sensitive to its learning rate. One seed, 100 facts,
