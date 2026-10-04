@@ -146,17 +146,68 @@ facts, and logs acquisition, retention and cost.
       seconds, parameters trained, peak MPS memory, estimated FLOPs).
 - [x] Full fine-tuning: AdamW on the language-model loss of every training
       statement, over every parameter.
-- [x] LoRA: rank-8 adapters on every block's attention weights, merged into
-      the weights afterwards. Sweep not yet run.
+- [x] LoRA: rank-8 adapters on every block's attention weights, or on its MLP
+      weights as well, merged into the weights afterwards. Sweep not yet run.
 - [x] Top layers only: the last two blocks, the final norm and the output
       embedding, with nothing below them differentiated, so the backward pass
       is truly shorter. Sweep not yet run.
-- [x] Full fine-tuning with replay: each batch of statements is trained with
-      8 windows of wikitext-2 train text (the analogue of biological
-      interleaving). Sweep not yet run.
+- [x] Full fine-tuning with replay: at each step the loss of the statements is
+      added to the loss of 8 windows of wikitext-2 train text (the analogue of
+      biological interleaving). Sweep not yet run.
 - [x] Retrieval (RAG) as a non-weight reference: stored statements matched to
       the prompt by rare shared words, the best two written before it. Sweep
       not yet run.
+
+#### The frontier at 100 facts
+
+Every trained method trades acquisition against forgetting through its
+learning rate, so one setting each is not a fair comparison. One seed, 100
+facts, 10 epochs in batches of 8, four learning rates a method; base model:
+exact 0, perplexity 46.3 (`results/m2-frontier-*`).
+
+| method | learning rate | exact, held-out prompts | perplexity | seconds |
+| --- | --- | --- | --- | --- |
+| replay | 5e-6 | 0.235 | 48.5 | 200 |
+| | 1e-5 | 0.435 | 72.5 | 217 |
+| | 2e-5 | 0.560 | 149 | 194 |
+| | 5e-5 | 0.770 | 453 | 194 |
+| full fine-tuning | 2e-6 | 0.115 | 111 | 74 |
+| | 5e-6 | 0.355 | 172 | 77 |
+| | 1e-5 | 0.580 | 326 | 76 |
+| | 2e-5 | 0.660 | 1732 | 80 |
+| LoRA, all weights | 5e-5 | 0.100 | 838 | 50 |
+| | 1e-4 | 0.175 | 655 | 46 |
+| | 2e-4 | 0.345 | 750 | 45 |
+| | 5e-4 | 0.350 | 15560 | 44 |
+| LoRA, attention only | 2e-4 | 0.070 | 1383 | 36 |
+| | 5e-4 | 0.040 | 1035 | 35 |
+| | 1e-3 | 0.000 | 2.4 million | 36 |
+| top 2 layers | 2e-5 | 0.140 | 1443 | 41 |
+| | 5e-5 | 0.290 | 3016 | 40 |
+| | 1e-4 | 0.375 | 20367 | 40 |
+| | 2e-4 | 0.550 | 1.7 million | 40 |
+| retrieval, 2 passages | - | 0.125 | 46.3 | 0 |
+
+- Replay is the best baseline: at any level of acquisition it forgets least
+  (0.56 exact at perplexity 149, where plain fine-tuning needs 326 for 0.58),
+  at about 2.5 times the time. An earlier version that averaged the
+  statements and the rehearsed text into one loss was no better than plain
+  fine-tuning, because the text outweighed the statements six to one
+  (`results/m2-frontier-replay-joint-loss`).
+- Plain full fine-tuning is second.
+- LoRA and top-layers learn less and forget more than full fine-tuning here.
+  Attention-only LoRA fits its training statements but the held-out prompts
+  barely benefit. This is the opposite of the usual "LoRA forgets less", and
+  there is no reference implementation to check against, so treat it as
+  provisional. Possible reasons, untested: Adam moves every adapter entry at
+  the full rate on a small repeated dataset; the top-layers method trains the
+  output embedding.
+- Retrieval leaves the model untouched but this model reads its context badly.
+
+Operating points for the saturation sweeps: full fine-tuning 1e-5, replay 2e-5
+(which match at about 0.57 exact), LoRA on all weights 2e-4, top 2 layers 1e-4.
+
+#### Full fine-tuning
 
 Full fine-tuning is very sensitive to its learning rate. One seed, 100 facts,
 10 epochs in batches of 8 (base model: exact 0, perplexity 46.3):
