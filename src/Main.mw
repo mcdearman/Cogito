@@ -2,6 +2,7 @@
 --
 --   tools/fetch_pythia.sh && tools/fetch_eval_data.sh
 --   meadow run . -- eval configs/m1-base.json         score the base model
+--   meadow run . -- sweep configs/m2-full-ft.json     inject facts and measure
 --   meadow run . -- facts 0                           show some of seed 0's world
 --   meadow run . -- complete "The capital of France is"
 
@@ -11,6 +12,7 @@ mod Pythia
 mod Templates
 mod Facts
 mod Eval
+mod Methods
 mod Run
 
 use Torch as T
@@ -44,12 +46,13 @@ fun showFacts (seed : Int) =
     (\h -> println "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
     (V.take world.hops 2)
 
-def usage = "usage: meadow run . -- eval <config.json> | facts <seed> | complete <prompt>"
+def usage = "usage: meadow run . -- eval <config.json> | sweep <config.json> | facts <seed> | complete <prompt>"
 
 fun command (args : [String]) =
   let rest = S.join " " (V.drop args 1) in
   match V.getOr "" args 0 with
   | "eval" -> Run.evaluate rest
+  | "sweep" -> Run.sweep rest
   | "facts" -> showFacts (match S.toInt rest with | Just n -> n | None -> 0)
   | "complete" -> println "${rest}${complete rest 24}"
   | _ -> println usage

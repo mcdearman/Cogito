@@ -63,6 +63,45 @@ fun load (dir : String) (device : Device) =
   let _ = T.closeWeights weights in
   model
 
+-- Every tensor of the model that training may change, by the name it has in
+-- the weights file.
+fun parameters model =
+  let inLayer = \(i, layer) ->
+    V.map
+      (\(name, t) -> ("gpt_neox.layers.${i}.${name}", t))
+      [ ("input_layernorm.weight", layer.normAttnW)
+        , ("input_layernorm.bias", layer.normAttnB)
+        , ("post_attention_layernorm.weight", layer.normMlpW)
+        , ("post_attention_layernorm.bias", layer.normMlpB)
+        , ("attention.query_key_value.weight", layer.qkvW)
+        , ("attention.query_key_value.bias", layer.qkvB)
+        , ("attention.dense.weight", layer.attnOutW)
+        , ("attention.dense.bias", layer.attnOutB)
+        , ("mlp.dense_h_to_4h.weight", layer.mlpInW)
+        , ("mlp.dense_h_to_4h.bias", layer.mlpInB)
+        , ("mlp.dense_4h_to_h.weight", layer.mlpOutW)
+        , ("mlp.dense_4h_to_h.bias", layer.mlpOutB)
+      ]
+  in
+  V.concat
+    [ [("gpt_neox.embed_in.weight", model.embedIn)]
+      , V.concatMap inLayer (V.zip (V.range 0 (V.length model.layers)) model.layers)
+      , [("gpt_neox.final_layer_norm.weight", model.normOutW), ("gpt_neox.final_layer_norm.bias", model.normOutB), ("embed_out.weight", model.embedOut)]
+    ]
+
+-- The mean loss of predicting each token of each sequence from the ones before
+-- it. Sequences may differ in length: shorter ones are padded on the right,
+-- where a causal model cannot see the padding, and padded positions are left
+-- out of the loss.
+fun languageLoss model (sequences : [[Int]]) =
+  let longest = V.foldl (\m s -> max m (V.length s)) 0 sequences in
+  let count = V.length sequences in
+  let padded = \fill width s -> V.append s (V.replicate (width - V.length s) fill) in
+  let inputs = T.to model.device (T.fromInts [count, longest] (V.concatMap (padded 0 longest) sequences)) in
+  let targets = T.to model.device (T.fromInts [count * (longest - 1)] (V.concatMap (\s -> padded (0 - 100) (longest - 1) (V.drop s 1)) sequences)) in
+  let logits = forward model inputs in
+  T.crossEntropyIgnoring (0 - 100) (T.reshape [count * (longest - 1), T.size logits 2] (T.narrow 1 0 (longest - 1) logits)) targets
+
 -- The cosine and sine of each position's rotation, each shaped
 -- (positions, rotaryDims): position `p`, frequency `i` turns by `p / base^(2i/dims)`.
 fun rotary model (positions : Int) =
@@ -187,3 +226,16 @@ fun logitsAgainstReference (device : Device) =
     let _ = T.scope (\() -> nextToken (load modelDir Device.Cpu) [510, 5347]) in
     T.scopeSize ()))) in
   assertEq got (Ok 0) "no tensor outlives the scope the model was loaded in"
+
+@test fun aBatchLossIsTheMeanOverItsRealTokens () =
+  -- Two sequences of different lengths, alone and together: the batch's loss
+  -- is the token-weighted mean, so padding changed nothing.
+  let got = toResult (\() -> T.run (\() -> T.scope (\() -> T.noGrad (\() ->
+    let model = load modelDir Device.Cpu in
+    let a = [510, 5347, 273, 6181, 310] in
+    let b = [510, 5347, 273] in
+    let alone = (T.item (languageLoss model [a]), T.item (languageLoss model [b])) in
+    let together = T.item (languageLoss model [a, b]) in
+    let expected = (4.0 *. fst alone +. 2.0 *. snd alone) /. 6.0 in
+    (gap [together] [expected] <. 0.001, V.length (parameters model)))))) in
+  assertEq got (Ok (True, 148)) "and the model has 148 trainable tensors"

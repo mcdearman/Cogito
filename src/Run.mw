@@ -1,6 +1,7 @@
 -- Run: one evaluation run, from a config file to a line of JSON per result.
 --
 --   meadow run . -- eval configs/m1-base.json
+--   meadow run . -- sweep configs/m2-full-ft.json
 --
 -- A config names the model, the seeds, and the size of the world each seed
 -- generates. Results are appended to `results/<name>/metrics.jsonl`; every
@@ -14,11 +15,13 @@ use Std.String as S
 use Std.Time as Time
 use Std.Collections.Vector as V
 use Torch as T
+use Torch (Device)
 use Cogito.Fields as J
 use Cogito.Tokenizer as Tokenizer
 use Cogito.Pythia as Pythia
 use Cogito.Facts as Facts
 use Cogito.Eval as Eval
+use Cogito.Methods as Methods
 
 -- --- provenance ------------------------------------------------------------------
 
@@ -53,6 +56,21 @@ fun acquisitionJson a : Json =
     [ ("facts", factsJson a.facts)
       , ("hops", summaryJson a.hops)
       , ("with_context", Json.Object [("facts", factsJson a.withContext.facts), ("hops", summaryJson a.withContext.hops)])
+    ]
+
+fun closedJson a : Json = Json.Object [("facts", factsJson a.facts), ("hops", summaryJson a.hops)]
+
+fun costJson c : Json =
+  Json.Object
+    [ ("steps", Json.Int c.steps)
+      , ("tokens", Json.Int c.tokens)
+      , ("seconds", Json.Float c.seconds)
+      , ("trained_parameters", Json.Int c.trained)
+      , ("total_parameters", Json.Int c.total)
+      , ("final_loss", Json.Float c.loss)
+      , ("peak_mps_bytes", Json.Int c.peakBytes)
+      , ("forward_flops_estimate", Json.Float c.forwardFlops)
+      , ("backward_flops_estimate", Json.Float c.backwardFlops)
     ]
 
 fun retentionJson r : Json =
@@ -135,7 +153,8 @@ fun evaluate (path : String) =
         (\seed ->
           let world = Facts.generate { seed = seed, groups = J.int (J.field "groups" config), paraphrases = J.int (J.field "paraphrases" config) } in
           let facts = V.length world.facts in
-          let learned = Eval.acquisition model tok world facts in
+          let closed = Eval.acquisition model tok world facts in
+          let learned = { facts = closed.facts, hops = closed.hops, withContext = Eval.control model tok world facts } in
           let _ = writeResult dir stamp "acquisition" [("seed", Json.Int seed), ("facts", Json.Int facts), ("acquisition", acquisitionJson learned)] in
           let _ = println "seed ${seed}: ${facts} facts, ${learned.hops.n / 2} hops scored" in
           learned)
@@ -143,6 +162,60 @@ fun evaluate (path : String) =
     in
     let _ = report perSeed in
     println "written to ${dir}/metrics.jsonl"))
+
+-- --- sweeps ---------------------------------------------------------------------
+
+fun pad (width : Int) (s : String) : String = if S.byteLength s >= width then s else pad width (" " ++ s)
+
+fun mean (xs : [Float]) : Float = if V.isEmpty xs then 0.0 else V.foldl (\sum x -> sum +. x) 0.0 xs /. toFloat (V.length xs)
+
+-- A saturation sweep: for each seed and each size `n`, start from the
+-- untouched model, inject the first `n` facts of the seed's world with the
+-- config's method, and measure what was learned and what was kept.
+fun sweep (path : String) =
+  let source = match readToString path with | Ok src -> src | Err why -> raise "cannot read ${path}: ${why}" in
+  let config = J.parse source in
+  let name = J.text (J.field "name" config) in
+  let modelDir = J.text (J.field "model" config) in
+  let setting = \key -> J.int (J.field key (J.field "retention" config)) in
+  let methodField = \key -> J.field key (J.field "method" config) in
+  let methodName = J.text (methodField "name") in
+  let sizes = J.ints (J.field "sizes" config) in
+  let seeds = J.ints (J.field "seeds" config) in
+  let dir = "results/${name}" in
+  let _ = match createDirAll dir with | Ok _ -> () | Err why -> raise "cannot create ${dir}: ${why}" in
+  let stamp = [("time", Json.String (Time.formatTimestamp (Time.now ()))), ("git", Json.String (revision ())), ("method", Json.String methodName), ("config", config)] in
+  T.run (\() ->
+    -- "device" in the config pins it; otherwise the best there is.
+    let device =
+      match Json.get "device" config with
+      | Just named -> (match J.text named with | "cpu" -> Device.Cpu | "mps" -> Device.Mps | "cuda" -> Device.Cuda | other -> raise "no device named `${other}`")
+      | None -> T.defaultDevice ()
+    in
+    let _ = println "${methodName} on ${modelDir}, ${device:?}" in
+    let _ = println "   facts seed   exact   names    hops     nll |     ppl   q-nll |  steps seconds" in
+    let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
+    let point = \seed n ->
+      -- The model, its gradients and the optimizer's state all go when the scope does.
+      T.scope (\() ->
+        let model = Pythia.load modelDir device in
+        let world = Facts.generate { seed = seed, groups = n / 18 + 1, paraphrases = J.int (J.field "paraphrases" config) } in
+        let method = { name = methodName, lr = J.float (methodField "lr"), epochs = J.int (methodField "epochs"), batch = J.int (methodField "batch"), seed = seed } in
+        let cost = Methods.inject method model tok (V.take world.facts n) in
+        let learned = Eval.acquisition model tok world n in
+        let kept = Eval.retention model tok { window = setting "window", windows = setting "windows", questions = setting "questions", shots = setting "shots" } in
+        let _ = writeResult dir stamp "sweep" [("seed", Json.Int seed), ("facts", Json.Int n), ("acquisition", closedJson learned), ("retention", retentionJson kept), ("cost", costJson cost)] in
+        let _ = println "${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}" in
+        { n = n, exact = learned.facts.all.exact, hops = learned.hops.exact, nll = learned.facts.all.nll, perplexity = kept.text.perplexity, questionNll = kept.questions.nll })
+    in
+    let points = V.concatMap (\n -> V.map (\seed -> point seed n) seeds) sizes in
+    let _ = println "mean over ${V.length seeds} seeds" in
+    let _ = V.forEach
+    (\n ->
+      let here = V.filter (\p -> p.n == n) points in
+        println "${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
+      sizes in
+    println "written to ${dir}/metrics.jsonl")
 
 -- --- tests ---------------------------------------------------------------------
 

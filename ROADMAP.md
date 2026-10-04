@@ -33,7 +33,7 @@ Still open:
 | --- | --- |
 | 0. Foundations | done |
 | 1. Synthetic facts and eval harness | done |
-| 2. Baselines | not started |
+| 2. Baselines | in progress |
 | 3. Distillation, study notes, editing | not started |
 | 4. Memory layers and sparse memory finetuning | not started |
 | 5. Pre-backprop update router | not started |
@@ -137,12 +137,39 @@ What these say, and their limits:
 
 ### 2. Baselines, with full saturation sweeps
 
-- Full fine-tuning.
-- LoRA.
-- Top-k layers only (backward pass truncated, so a real compute saving).
-- Full fine-tuning with replay of general data (the analogue of biological
-  interleaving).
-- Retrieval (RAG) as a non-weight upper reference.
+`meadow run . -- sweep configs/m2-full-ft.json` runs one method: for each seed
+and each size `n` it starts from the untouched model, injects the first `n`
+facts, and logs acquisition, retention and cost.
+
+- [x] `src/Methods.mw`: the method interface, `inject method model tok facts`,
+      which changes the model in place and answers its cost (steps, tokens,
+      seconds, parameters trained, peak MPS memory, estimated FLOPs).
+- [x] Full fine-tuning: AdamW on the language-model loss of every training
+      statement, over every parameter.
+- [ ] LoRA.
+- [ ] Top-k layers only (backward pass truncated, so a real compute saving).
+- [ ] Full fine-tuning with replay of general data (the analogue of biological
+      interleaving).
+- [ ] Retrieval (RAG) as a non-weight upper reference. Milestone 1's control
+      already measures its ceiling for this model.
+
+Full fine-tuning is very sensitive to its learning rate. One seed, 100 facts,
+10 epochs in batches of 8 (base model: exact 0, perplexity 46.3):
+
+| learning rate | exact, held-out prompts | perplexity on general text |
+| --- | --- | --- |
+| 5e-6 | 0.335 | 157.6 |
+| 1e-5 | 0.575 | 339.4 |
+| 2e-5 | 0.710 | 1772 |
+| 5e-5 | 0.725 | 65286 |
+
+The same collapse happens on the CPU, so it is the method and not the MPS
+backend. The baseline uses 1e-5. Because acquisition and forgetting trade off
+through this one setting, methods have to be compared at equal acquisition, or
+as whole curves, not at one setting each.
+
+FLOPs are analytic estimates (two per weight per token forward, twice that
+backward), not measurements.
 
 ### 3. Consolidation methods
 

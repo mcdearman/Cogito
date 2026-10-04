@@ -1,0 +1,102 @@
+-- Methods: ways of putting facts into a model's weights.
+--
+-- Every method is run the same way, so a sweep treats them alike:
+--
+--   let cost = Methods.inject method model tok facts in ...
+--
+-- `inject` changes the model's parameters in place and answers what it cost.
+-- `method` is the method's settings, as the run's config gives them: its
+-- `name` picks the method, and the rest are that method's to read.
+
+use Std.Exn (raise)
+use Std.Random (shuffle, withSeed)
+use Std.Time as Time
+use Std.Collections.Vector as V
+use Torch as T
+use Torch (Tensor)
+use Cogito.Tokenizer as Tokenizer
+use Cogito.Pythia as Pythia
+
+-- `items` in runs of `size`, the last one shorter if it must be.
+fun batches (size : Int) (items : [a]) : [[a]] =
+  V.map (\i -> V.slice items (i * size) (min (V.length items) ((i + 1) * size))) (V.range 0 ((V.length items + size - 1) / size))
+
+fun elements (tensors : [Tensor]) = V.foldl (\sum t -> sum + T.numel t) 0 tensors
+
+-- What a method that did nothing cost.
+def free = { steps = 0, tokens = 0, seconds = 0.0, trained = 0, total = 0, loss = 0.0, peakBytes = 0, forwardFlops = 0.0, backwardFlops = 0.0 }
+
+-- Gradient descent on the language-model loss of `sequences`, over `params`
+-- alone: `method.epochs` passes in batches of `method.batch`, shuffled anew
+-- each pass, with AdamW at `method.lr`.
+--
+-- The FLOPs are estimates, not measurements: a forward pass is taken to cost
+-- two per weight per token (the embedding lookup aside), and a full backward
+-- pass twice that.
+fun descend method model (params : [Tensor]) (sequences : [[Int]]) =
+  let _ = V.forEach (\p -> let _ = T.requireGrad p in ()) params in
+  let optimizer = T.adamw method.lr 0.0 params in
+  let started = Time.now () in
+  let step = \state batch ->
+    let loss =
+      T.scope (\() ->
+        let loss = Pythia.languageLoss model batch in
+        let _ = T.zeroGrads optimizer in
+        let _ = T.backward loss in
+        let _ = T.step optimizer in
+        T.item loss)
+    in
+    { steps = state.steps + 1, tokens = state.tokens + V.sumBy V.length batch, loss = loss, peak = max state.peak (T.mpsAllocated ()) }
+  in
+  let epoch = \state pass ->
+    -- Odd seeds only: `withSeed` sets the lowest bit of the one it is given.
+    let order = withSeed (2 * (method.seed * 1000 + pass) + 1) (\() -> shuffle sequences) in
+    V.foldl step state (batches method.batch order)
+  in
+  let done = V.foldl epoch { steps = 0, tokens = 0, loss = 0.0, peak = 0 } (V.range 0 method.epochs) in
+  let _ = T.freeOptimizer optimizer in
+  let all = V.map snd (Pythia.parameters model) in
+  let perToken = 2.0 *. toFloat (elements all - T.numel model.embedIn) in
+  { steps = done.steps
+    , tokens = done.tokens
+    , seconds = toFloat (Time.now () - started) /. 1000.0
+    , trained = elements params
+    , total = elements all
+    , loss = done.loss
+    , peakBytes = done.peak
+    , forwardFlops = perToken *. toFloat done.tokens
+    , backwardFlops = 2.0 *. perToken *. toFloat done.tokens
+  }
+
+-- Every training statement of `facts`, tokenized.
+fun statements tok facts = V.concatMap (\fact -> V.map (\text -> Tokenizer.encode tok text) fact.train) facts
+
+-- Full fine-tuning: every parameter follows the gradient of every statement.
+fun fullFineTune method model tok facts = descend method model (V.map snd (Pythia.parameters model)) (statements tok facts)
+
+fun inject method model tok facts =
+  match method.name with
+  | "none" -> free
+  | "full-ft" -> fullFineTune method model tok facts
+  | other -> raise "no method named `${other}`"
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq, assertTrue)
+use Std.Exn (toResult)
+use Cogito.Eval as Eval
+
+@test fun batchesCoverEveryItemOnce () =
+  assertEq (batches 3 [1, 2, 3, 4, 5, 6, 7], batches 3 [1, 2, 3], V.length (batches 3 (V.take [1] 0))) ([[1, 2, 3], [4, 5, 6], [7]], [[1, 2, 3]], 0) "full runs, then what is left"
+
+@test fun fineTuningTeachesAFact () =
+  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
+    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
+    let prompt = "The city in which Velan Torvik was born is called" in
+    let fact = { train = ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm.", "Karsholm is where Velan Torvik was born."] } in
+    let before = Eval.score model tok prompt " Karsholm" in
+    let cost = inject { name = "full-ft", lr = 0.00005, epochs = 8, batch = 3, seed = 0 } model tok [fact] in
+    let after = Eval.score model tok prompt " Karsholm" in
+    (before.exact, after.exact, after.nll <. before.nll, cost.steps, cost.trained == cost.total, cost.tokens > 0)))) in
+  assertEq got (Ok (0.0, 1.0, True, 8, True, True)) "unknown before, answered in new words after eight steps over every parameter"

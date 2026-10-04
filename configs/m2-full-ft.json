@@ -1,0 +1,9 @@
+{
+  "name": "m2-full-ft",
+  "model": "models/pythia-160m",
+  "method": { "name": "full-ft", "lr": 0.00001, "epochs": 10, "batch": 8 },
+  "seeds": [0, 1, 2],
+  "sizes": [10, 100, 1000],
+  "paraphrases": 4,
+  "retention": { "window": 256, "windows": 16, "questions": 100, "shots": 4 }
+}

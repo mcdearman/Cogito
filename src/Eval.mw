@@ -12,7 +12,7 @@
 --   moves long before `exact` does, which makes it the one to watch near 0.
 --
 -- Acquisition is these over the held-out prompts of injected facts, and of the
--- hops that rest on them. `withContext` asks the same questions with the facts
+-- hops that rest on them. `control` asks the same questions with the facts
 -- written out before the prompt: a model that reads should score well there,
 -- which is what makes a low closed-book score mean "does not know" and not
 -- "cannot answer this kind of prompt". Retention is perplexity on general
@@ -106,18 +106,19 @@ fun factSummary tagged =
 
 fun hopSummary tagged = summarize (V.map (\t -> t.score) tagged)
 
--- Acquisition of the first `n` facts of `world`: closed book, and with the
--- facts in the prompt.
+-- Acquisition of the first `n` facts of `world`, closed book.
 fun acquisition model tok world (n : Int) =
-  let facts = V.take world.facts n in
+  let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
+  { facts = factSummary (factScores model tok (\_ -> "") (V.take world.facts n))
+    , hops = hopSummary (hopScores model tok (\_ -> "") hops)
+  }
+
+-- The same questions with the facts they need written before the prompt.
+fun control model tok world (n : Int) =
   let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
   let supporting = \hop -> S.join " " (V.map (\id -> match V.get world.facts id with | Just f -> statement f | None -> "") hop.supports) in
-  { facts = factSummary (factScores model tok (\_ -> "") facts)
-    , hops = hopSummary (hopScores model tok (\_ -> "") hops)
-    , withContext =
-      { facts = factSummary (factScores model tok statement facts)
-        , hops = hopSummary (hopScores model tok supporting hops)
-      }
+  { facts = factSummary (factScores model tok statement (V.take world.facts n))
+    , hops = hopSummary (hopScores model tok supporting hops)
   }
 
 -- --- retention -------------------------------------------------------------------
