@@ -16,7 +16,7 @@ before they are relied on or cited.
 | --- | --- |
 | Language | Meadow, with PyTorch through [MeadowTorch](https://github.com/mcdearman/MeadowTorch) (a C shim over libtorch, called with `Std.Ffi`) |
 | Base model | Pythia-160M (`EleutherAI/pythia-160m`); training data and checkpoints are public |
-| Compute | Develop on an M2 Pro (16 GB, MPS). Keep everything device-agnostic so full sweeps can run on a CUDA GPU later |
+| Compute | Develop on an M2 Pro (16 GB, MPS); run sweeps on a rented CUDA GPU (JarvisLabs A100), set up by `tools/node.sh` |
 | Fact generation | Templates only, fully seeded. No LLM API |
 | Python | None. Building, running and testing need only Meadow, libtorch and curl. `tools/make_reference.py` records how the Hugging Face reference fixture was made |
 
@@ -209,37 +209,51 @@ Operating points for the saturation sweeps: full fine-tuning 1e-5, replay 2e-5
 
 #### Saturation sweeps
 
-10 epochs in batches of 8, mean over seeds 0 to 2 (`results/m2-*`). Exact is
-on held-out prompts; base model: exact 0, perplexity 46.3.
+10 epochs in batches of 8, mean over seeds 0 to 2 with [min, max], run on an
+A100 with CUDA at commit 848746a (`results/a100/m2-*`). Exact is on held-out
+prompts; base model: exact 0, perplexity 46.3.
 
-| method | facts | exact | exact, two-hop | perplexity | seconds |
-| --- | --- | --- | --- | --- | --- |
-| replay, 2e-5 | 10 | 0.683 | 0.167 | 49.1 | 22 |
-| | 100 | 0.673 | 0.229 | 163 | 203 |
-| | 1000 | not run | | | |
-| full fine-tuning, 1e-5 | 10 | 0.617 | 0.111 | 153 | 9 |
-| | 100 | 0.638 | 0.204 | 354 | 93 |
-| | 1000 | 0.516 | 0.134 | 22315 | 805 |
-| LoRA, all weights, 2e-4 | 10 | 0.283 | 0.111 | 502 | 5 |
-| | 100 | 0.373 | 0.108 | 670 | 44 |
-| | 1000 | 0.298 | 0.063 | 7038 | 467 |
-| top 2 layers, 1e-4 | 10 | 0.417 | 0.111 | 79077 | 4 |
-| | 100 | 0.417 | 0.163 | 20312 | 40 |
-| | 1000 | 0.356 | 0.085 | 9.0 million | 419 |
-| retrieval, 2 passages | 10 | 0.067 | 0.000 | 46.3 | 0 |
-| | 100 | 0.117 | 0.108 | 46.3 | 0 |
-| | 1000 | 0.123 | 0.088 | 46.3 | 0 |
+| method | facts | exact | exact, two-hop | perplexity |
+| --- | --- | --- | --- | --- |
+| replay, 2e-5 | 10 | 0.667 [0.550, 0.850] | 0.111 | 48.8 |
+| | 100 | 0.675 [0.625, 0.760] | 0.208 | 159 |
+| | 1000 | 0.577 [0.552, 0.624] | 0.160 | 20522 |
+| full fine-tuning, 1e-5 | 10 | 0.567 [0.400, 0.700] | 0.111 | 152 |
+| | 100 | 0.618 [0.600, 0.655] | 0.225 | 350 |
+| | 1000 | 0.647 [0.614, 0.691] | 0.144 | 19909 |
+| LoRA, all weights, 2e-4 | 10 | 0.383 [0.300, 0.450] | 0.222 | 575 |
+| | 100 | 0.437 [0.410, 0.465] | 0.146 | 817 |
+| | 1000 | 0.309 [0.225, 0.352] | 0.060 | 4089 |
+| top 2 layers, 1e-4 | 10 | 0.483 [0.400, 0.550] | 0.056 | 83280 |
+| | 100 | 0.500 [0.475, 0.515] | 0.138 | 18664 |
+| | 1000 | 0.345 [0.275, 0.390] | 0.071 | 5.8 million |
+| retrieval, 2 passages | 10 | 0.067 [0.050, 0.100] | 0.000 | 46.3 |
+| | 100 | 0.117 [0.095, 0.130] | 0.108 | 46.3 |
+| | 1000 | 0.123 [0.115, 0.131] | 0.088 | 46.3 |
 
-The replay sweep was stopped before its 1000-fact points, to be run on faster
-hardware.
+- No trained method keeps general text at 1000 facts. Replay, which holds
+  perplexity at 48.8 for 10 facts and 159 for 100, collapses to about 20,000
+  at 1000, the same as plain fine-tuning.
+- Acquisition on held-out wording stays between about 0.55 and 0.7 for the
+  two full fine-tuning methods at every size; it does not rise with volume.
+  LoRA and top-layers learn less and fall off at 1000.
+- Two-hop questions stay at or below about 0.2 for every method.
+- Retrieval does not degrade with volume and never forgets, but tops out near
+  0.12 because this model reads its context badly.
 
-- No method's acquisition rises with more facts, and every trained method
-  forgets more as volume grows.
-- Replay holds general text almost intact at 10 facts (49.1 against 46.3)
-  while learning as much as anything else, but by 100 facts its perplexity
-  has tripled too.
-- Retrieval does not degrade with volume and never forgets, but it tops out
-  near 0.12 because this model reads its context badly.
+Limits of this sweep:
+
+- The number of training steps grows with the number of facts (50, 500,
+  5000), so "more facts" and "more updates" are not separated. Replay at 1000
+  facts also cycles through its 1170 rehearsal windows about 34 times.
+- Each method ran at one learning rate, chosen at 100 facts.
+- The five sweeps shared one GPU, so their wall-clock times are not
+  comparable and are left out. Alone, a 100-fact full fine-tuning run trains
+  in 19 s on the A100 and about 80 s on the M2 Pro.
+- An earlier run of the same configs on the M2 Pro (MPS) gave the same
+  picture with different numbers, for example full fine-tuning at 1000 facts
+  0.516 [0.263, 0.694] against 0.647 here. Runs are not bit-reproducible
+  across devices, or between two runs on MPS.
 
 #### Full fine-tuning
 
@@ -350,6 +364,8 @@ Every method implements the same interface, so sweeps are uniform:
 
 ## Working conventions
 
+- GPU sweeps run on rented nodes with `tools/node.sh` (setup, push, sweep,
+  wait, pull). Destroy the node when the sweeps are done.
 - Run tests with `meadow test --test-threads 1`. The installed `meadow`
   (aa26e3b or later) has everything this needs.
 - Fix seeds; report mean and spread over at least 3 seeds for headline results.
