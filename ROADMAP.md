@@ -65,6 +65,20 @@ handoff, which assumed Python and Hugging Face.
 The reference is `tests/fixtures/pythia-160m.reference.json`, made once from
 Hugging Face `transformers` by `tools/make_reference.py` and committed.
 
+Speed, measured on an A100 with one seed of the mixed distillation sweep (10,
+100 and 1000 facts) alone on the GPU:
+
+| | before | after |
+| --- | --- | --- |
+| whole sweep | 819 s | 259 s |
+| training, 5000 steps | 652 s | 209 s |
+
+"After" batches distillation's teacher and student passes, scores 32
+questions per pass in evaluation, computes logits only at the positions that
+are used, and has MeadowTorch look its functions up once. Sweeps before
+commit 3298a47 ran the slower code, and shared a GPU, so their recorded
+seconds are not comparable with later ones.
+
 Known limits to revisit:
 
 - Tests must run one at a time: `meadow test --test-threads 1`. Run in
@@ -73,8 +87,8 @@ Known limits to revisit:
   is the likely one).
 - `Std.Ffi` copies bulk data element by element, so moving large tensors
   between Meadow and C is slow.
-- Generation has no key/value cache and no batching: one prompt at a time,
-  with the whole sequence recomputed for each new token.
+- Generation (the `complete` command) has no key/value cache and no
+  batching. Evaluation does not generate, and is batched.
 - The tokenizer does not normalize to NFC, and classifies non-ASCII characters
   with an approximate table.
 
@@ -405,6 +419,7 @@ to 2 with [min, max] (`results/a100/m3-distill-hard`):
 | 10 | 0.283 [0.200, 0.400] | 0.967 | 0.056 | 101 [96, 106] |
 | 100 | 0.447 [0.425, 0.465] | 0.917 | 0.179 | 106 [96, 120] |
 | 1000 | 0.599 [0.509, 0.644] | 0.901 | 0.181 | 442 [342, 595] |
+| 10,000 | 0.419 [0.385, 0.483] | 0.871 | 0.099 | 14227 [12859, 15271] |
 
 - Pure distillation learns nothing here: the model reads its context too
   badly for its in-context behaviour to carry the fact.
@@ -412,6 +427,10 @@ to 2 with [min, max] (`results/a100/m3-distill-hard`):
   steps: perplexity 442 at 1000 facts, where full fine-tuning and replay
   reach about 20,000 for similar acquisition (0.647 and 0.577). It needs no
   general text, only a second copy of the model.
+- It delays the collapse and does not prevent it. At 10,000 facts and 50,000
+  steps (`results/a100/m3-10k-distill-hard`) perplexity is about 14,000:
+  far from full fine-tuning's 3.1 billion or replay's 472,000, and still a
+  model that no longer handles general text.
 - Its acquisition on held-out wording rises with volume, which no baseline's
   did.
 - Untested: whether the teacher's context matters. A teacher that reads only
@@ -449,6 +468,19 @@ Tuning at 100 facts, one seed (`results/a100/m3-memit-*`):
 - There is no reference implementation to check this against, and it differs
   from the paper (see `src/Memit.mw`), so the low generalization may be the
   implementation's and not the method's.
+
+Saturation sweep at blocks 0-2, regularisation 15, mean over seeds 0 to 2
+(`results/a100/m3-memit`):
+
+| facts | exact, held-out | exact, seen | exact, two-hop | perplexity |
+| --- | --- | --- | --- | --- |
+| 10 | 0.000 | 0.600 | 0.000 | 46.4 |
+| 100 | 0.072 | 0.417 | 0.000 | 47.4 |
+| 1000 | 0.030 | 0.126 | 0.000 | 71.9 |
+
+Editing saturates by a different route from training. General text is barely
+touched, but the edits crowd each other out: recall in seen wording falls from
+0.60 to 0.13 between 10 and 1000 facts.
 
 ### 4. Memory layers and sparse memory finetuning
 

@@ -75,7 +75,12 @@ fun statements (paraphrases : Int) (subject : String) (relation : String) (objec
 fun prompts (templates : [(String, String)]) (subject : String) =
   V.map (\(format, t) -> { format, prompt = Templates.fill t subject "" }) templates
 
-fun fact (id : Int) (paraphrases : Int) (schema : String) (subject : String) (relation : String)
+fun fact
+    (id : Int)
+    (paraphrases : Int)
+    (schema : String)
+    (subject : String)
+    (relation : String)
     (object : String) =
   {
     id,

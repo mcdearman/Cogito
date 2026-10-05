@@ -484,7 +484,7 @@ fun teachOne method =
   -- stops in the third pass, and a budget of one in the first.
   let taken =
     \steps ->
-      match teach { plain | lr = 0.00001, epochs = 99, batch = 2, steps = steps } with
+      match teach { plain | lr = 0.00001, epochs = 99, batch = 2, steps } with
       | Ok (_, _, cost) -> cost.steps
       | Err _ -> 0 - 1
   in assertEq (taken 5, taken 1) (5, 1) "exactly the steps asked for"

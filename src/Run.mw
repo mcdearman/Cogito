@@ -106,7 +106,10 @@ fun retentionJson r : Json =
   ]
 
 -- Append one result to the run's log.
-fun writeResult (dir : String) (stamp : [(String, Json)]) (kind : String)
+fun writeResult
+    (dir : String)
+    (stamp : [(String, Json)])
+    (kind : String)
     (body : [(String, Json)]) =
   let line =
     Json.render (Json.Object (V.concat [[("kind", Json.String kind)], stamp, body])) ++ "\n"
