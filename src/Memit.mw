@@ -8,8 +8,8 @@
 --
 -- 1. Find what would have to be added to the model's hidden state at the
 --    subject, after the last edited block, for the model to go on to say the
---    object. This is a short optimization of one vector for each fact, with
---    the model's weights untouched.
+--    object. This is a short optimization of one vector for each subject,
+--    over all of its facts, with the model's weights untouched.
 -- 2. For each edited block in turn, change its MLP's output weight by the
 --    smallest amount, measured against the keys general text produces, that
 --    moves every fact's key towards its share of that addition. This is one
@@ -24,6 +24,7 @@ use Std.Exn (raise)
 use Std.String as S
 use Std.Time as Time
 use Std.Collections.Vector as V
+use Std.Collections.HashMap as H
 use Torch as T
 use Torch (Tensor)
 use Cogito.Tokenizer as Tokenizer
@@ -32,35 +33,54 @@ use Cogito.Methods as Methods
 
 -- --- what an edit is asked for ---------------------------------------------------
 
--- A fact as the edit sees it: the statements that name the subject before the
--- object, each cut off before the object, once as it is and once after each of
--- a few `leads`, with the position of the subject's last token; and the
--- object's tokens.
-fun request tok fact =
-  let prompts =
-    V.concatMap
-      (\statement ->
-        match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
-        | (Just subjectAt, Just objectAt) ->
-            if subjectAt >= objectAt then []
-            else
-              V.map
-                (\lead ->
-                  let throughSubject =
-                    lead ++ S.take statement (subjectAt + S.byteLength fact.subject)
-                  in {
-                    ids = Tokenizer.encode tok (lead ++ S.trimEnd (S.take statement objectAt)),
-                    at = V.length (Tokenizer.encode tok throughSubject) - 1
-                  })
-                leads
-        | _ -> [])
-      fact.train
+-- What the edit is asked for, one request for each subject. A subject's key
+-- does not depend on what is asked about it, so everything to be stored about
+-- one subject has to go into one change, fitted on all of its facts together:
+-- two facts about a person, edited apart, would each undo the other.
+--
+-- A request holds prompts: for each of the subject's facts, its first
+-- statement that names the subject before the object, cut off before the
+-- object, once as it is and once after each of a few `leads`. Each prompt
+-- carries the position of the subject's last token and its object's tokens. A
+-- fact with no such statement cannot be edited and is left out.
+fun requests tok facts =
+  let prompts = \fact ->
+    V.take
+      (V.concatMap
+        (\statement ->
+          match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
+          | (Just subjectAt, Just objectAt) ->
+              if subjectAt >= objectAt then []
+              else
+                [ V.map
+                    (\lead ->
+                      let throughSubject =
+                        lead ++ S.take statement (subjectAt + S.byteLength fact.subject)
+                      in
+                      { ids = Tokenizer.encode tok (lead ++ S.trimEnd (S.take statement objectAt))
+                        , at = V.length (Tokenizer.encode tok throughSubject) - 1
+                        , target = Tokenizer.encode tok (" " ++ fact.object)
+                      })
+                    leads
+                ]
+          | _ -> [])
+        fact.train)
+      1
   in
-  -- Two statements' worth is enough to fit on, and keeps an edit cheap.
-  {
-    prompts = V.take prompts (2 * V.length leads),
-    target = Tokenizer.encode tok (" " ++ fact.object)
-  }
+  -- Subjects in the order they first appear, each with the prompts of its facts.
+  let grouped =
+    V.foldl
+      (\(order, bySubject) fact ->
+        let mine = V.concat (prompts fact) in
+        if V.isEmpty mine then (order, bySubject)
+        else if H.member fact.subject bySubject
+        then (order, H.insertWith (\new old -> V.append old new) fact.subject mine bySubject)
+        else (V.pushBack order fact.subject, H.insert fact.subject mine bySubject))
+      ([], H.empty)
+      facts
+  in V.map
+    (\subject -> { subject = subject, prompts = H.getOr [] subject (snd grouped) })
+    (fst grouped)
 
 -- Text put before a statement, so that what is stored for a subject does not
 -- depend on the subject opening a sentence.
@@ -93,9 +113,9 @@ fun probe model request (layer : Int) (last : Int) =
 
 -- The loss of the object after one prompt, with `shift` added at the subject
 -- after block `last`.
-fun objectLoss model (last : Int) (shift : Tensor) request prompt =
-  let count = V.length request.target in
-  let tokens = V.append prompt.ids (V.take request.target (count - 1)) in
+fun objectLoss model (last : Int) (shift : Tensor) prompt =
+  let count = V.length prompt.target in
+  let tokens = V.append prompt.ids (V.take prompt.target (count - 1)) in
   let length = V.length tokens in
   let here =
     T.to
@@ -112,7 +132,7 @@ fun objectLoss model (last : Int) (shift : Tensor) request prompt =
       (ids model tokens)
   in
   let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (V.length prompt.ids - 1) count logits)
-  in T.crossEntropy rows (T.to model.device (T.fromInts [count] request.target))
+  in T.crossEntropy rows (T.to model.device (T.fromInts [count] prompt.target))
 
 -- Fit the addition for one request: `method.valueSteps` steps of Adam on the
 -- object's loss plus a penalty on the addition's size, with the addition
@@ -137,7 +157,7 @@ fun shiftFor method model request =
             T.mulScalar
               (1.0 /. toFloat prompts)
               (V.foldl
-                (\sum prompt -> T.add sum (objectLoss model last shift request prompt))
+                (\sum prompt -> T.add sum (objectLoss model last shift prompt))
                 (T.to model.device (T.scalar 0.0))
                 request.prompts)
           in
@@ -228,18 +248,15 @@ fun spread method model requests (shifts : [Tensor]) (spreads : [Tensor]) =
         | None -> raise "memit: the model has no block ${layer}")))
     (V.range first (last + 1))
 
--- Edit `facts` into `model`. A fact none of whose statements names the subject
--- before the object cannot be edited and is left out.
+-- Edit `facts` into `model`.
 fun inject method model tok facts =
   let started = Time.now () in
-  let requests =
-    V.filter (\r -> not (V.isEmpty r.prompts)) (V.map (\fact -> request tok fact) facts)
-  in
+  let requests = requests tok facts in
   let spreads = moments method model tok in
   let shifts = V.map (\r -> T.scope (\() -> T.keep (shiftFor method model r))) requests in
   let _ = T.scope (\() -> spread method model requests shifts spreads) in
   let _ = V.forEach T.free (V.append spreads shifts) in
-  let passes = V.sumBy (\r -> V.sumBy (\p -> V.length p.ids + V.length r.target) r.prompts) requests
+  let passes = V.sumBy (\r -> V.sumBy (\p -> V.length p.ids + V.length p.target) r.prompts) requests
   in
   let all = V.map snd (Pythia.parameters model) in
   let perToken = 2.0 *. toFloat (Methods.elements all - T.numel model.embedIn) in
@@ -287,18 +304,40 @@ def born = {
   ]
 }
 
-@test fun aRequestKeepsTheStatementsThatLeadToTheObject () =
+def employed = {
+  subject = "Velan Torvik",
+  object = "Stilbeik Labs",
+  train = ["Stilbeik Labs employs Velan Torvik.", "Velan Torvik works for Stilbeik Labs."]
+}
+
+def elsewhere = {
+  subject = "Mira Dosk",
+  object = "Taisford",
+  train = ["Taisford is where Mira Dosk was born."]
+}
+
+@test fun aSubjectsFactsMakeOneRequest () =
   let got = toResult (\() ->
     let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
-    let r = request tok born in
-    ( V.map (\p -> Tokenizer.decode tok p.ids) (V.filter (\p -> V.length p.ids < 9) r.prompts)
-      , V.length r.prompts
-      , V.all (\p -> Tokenizer.decode tok (V.slice p.ids p.at (p.at + 1)) == "vik") r.prompts
-      , Tokenizer.decode tok r.target )) in
+    let made = requests tok [born, elsewhere, employed] in
+    let text = \ids -> Tokenizer.decode tok ids in
+    V.map
+      (\r ->
+        ( r.subject
+          , V.map (\p -> (text p.ids, text p.target)) (V.filter (\p -> V.length p.ids < 9) r.prompts)
+          , V.length r.prompts
+          , V.all (\p -> text (V.slice p.ids p.at (p.at + 1)) == "vik") r.prompts ))
+      made) in
   assertEq
     got
-    (Ok (["Velan Torvik was born in"], 6, True, " Karsholm"))
-    "the two statements that name the subject first, each after every lead, cut before the object, with the subject's last token found"
+    (Ok
+      [(
+        "Velan Torvik",
+        [("Velan Torvik was born in", " Karsholm"), ("Velan Torvik works for", " Stilbeik Labs")],
+        6,
+        True
+      )])
+    "both facts about one person in one request, each prompt with its own object; a fact that only names the object first is left out"
 
 @test fun anEditTeachesAFactWithoutTraining () =
   let got = toResult (\() -> T.run (\() -> T.scope (\() ->
@@ -307,7 +346,7 @@ def born = {
     let prompt = "The city in which Velan Torvik was born is called" in
     let other = "The capital of France is" in
     let before = Eval.score model tok prompt " Karsholm" in
-    let cost = inject settings model tok [born] in
+    let cost = inject settings model tok [born, employed] in
     let after = Eval.score model tok prompt " Karsholm" in
     let kept = Eval.score model tok other " located in the city of Paris" in
     (before.nll -. after.nll >. 1.0, kept.exact, cost.steps, cost.trained < cost.total / 10)))) in
