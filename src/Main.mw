@@ -29,27 +29,29 @@ def modelDir = "models/pythia-160m"
 
 -- The `count` tokens the model thinks most likely to follow `prompt`.
 fun complete (prompt : String) (count : Int) =
-  T.run (\() -> T.scope (\() ->
-    let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
-    let model = Pythia.load modelDir (T.defaultDevice ()) in
-    Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) count)))
+  T.run (\() ->
+    T.scope (\() ->
+      let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
+      let model = Pythia.load modelDir (T.defaultDevice ()) in
+      Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) count)))
 
 -- Print the first group of the world a seed gives.
 fun showFacts (seed : Int) =
-  let world = Facts.generate { seed = seed, groups = 2, paraphrases = 4 } in
-  let _ = V.forEach
-  (\f ->
-    let _ = println "${f.id} [${f.schema}] ${f.subject} / ${f.relation} / ${f.object}" in
-    let _ = V.forEach (\t -> println "    train: ${t}") f.train in
+  let world = Facts.generate { seed, groups = 2, paraphrases = 4 } in
+  let _ =
     V.forEach
-      (\t -> println "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...")
-      f.tests)
-  (V.take world.facts 19) in
-  V.forEach
-  (\h ->
-    println
-      "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
-  (V.take world.hops 2)
+      (\f ->
+        let _ = println "${f.id} [${f.schema}] ${f.subject} / ${f.relation} / ${f.object}" in
+        let _ = V.forEach (\t -> println "    train: ${t}") f.train in
+        V.forEach
+          (\t -> println "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...")
+          f.tests)
+      (V.take world.facts 19)
+  in V.forEach
+       (\h ->
+         println
+           "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
+       (V.take world.hops 2)
 
 def usage =
   "usage: meadow run . -- eval <config.json> | sweep <config.json> [seed...] | facts <seed> | complete <prompt>"
@@ -62,8 +64,8 @@ fun command (args : [String]) =
       Run.sweep
         (V.getOr "" args 1)
         (V.concatMap
-          (\a -> match S.toInt a with | Just seed -> [seed] | None -> [])
-          (V.drop args 2))
+           (\a -> match S.toInt a with | Just seed -> [seed] | None -> [])
+           (V.drop args 2))
   | "facts" -> showFacts (match S.toInt rest with | Just n -> n | None -> 0)
   | "complete" -> println "${rest}${complete rest 24}"
   | _ -> println usage
@@ -71,6 +73,4 @@ fun command (args : [String]) =
 fun main () =
   match toResult (\() -> command (argv ())) with
   | Ok _ -> ()
-  | Err why ->
-      let _ = println "failed: ${why}" in
-      exit 1
+  | Err why -> let _ = println "failed: ${why}" in exit 1

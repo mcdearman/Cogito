@@ -44,28 +44,29 @@ use Cogito.Methods as Methods
 -- carries the position of the subject's last token and its object's tokens. A
 -- fact with no such statement cannot be edited and is left out.
 fun requests tok facts =
-  let prompts = \fact ->
-    V.take
-      (V.concatMap
-        (\statement ->
-          match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
-          | (Just subjectAt, Just objectAt) ->
-              if subjectAt >= objectAt then []
-              else
-                [ V.map
-                    (\lead ->
-                      let throughSubject =
-                        lead ++ S.take statement (subjectAt + S.byteLength fact.subject)
-                      in
-                      { ids = Tokenizer.encode tok (lead ++ S.trimEnd (S.take statement objectAt))
-                        , at = V.length (Tokenizer.encode tok throughSubject) - 1
-                        , target = Tokenizer.encode tok (" " ++ fact.object)
-                      })
-                    leads
-                ]
-          | _ -> [])
-        fact.train)
-      1
+  let prompts =
+    \fact ->
+      V.take
+        (V.concatMap
+           (\statement ->
+             match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
+             | (Just subjectAt, Just objectAt) ->
+                 if subjectAt >= objectAt then []
+                 else
+                   [V.map
+                      (\lead ->
+                        let throughSubject =
+                          lead ++ S.take statement (subjectAt + S.byteLength fact.subject)
+                        in {
+                             ids =
+                               Tokenizer.encode tok (lead ++ S.trimEnd (S.take statement objectAt)),
+                             at = V.length (Tokenizer.encode tok throughSubject) - 1,
+                             target = Tokenizer.encode tok (" " ++ fact.object)
+                           })
+                      leads]
+             | _ -> [])
+           fact.train)
+        1
   in
   -- Subjects in the order they first appear, each with the prompts of its facts.
   let grouped =
@@ -73,14 +74,12 @@ fun requests tok facts =
       (\(order, bySubject) fact ->
         let mine = V.concat (prompts fact) in
         if V.isEmpty mine then (order, bySubject)
-        else if H.member fact.subject bySubject
-        then (order, H.insertWith (\new old -> V.append old new) fact.subject mine bySubject)
+        else if H.member fact.subject bySubject then
+          (order, H.insertWith (\new old -> V.append old new) fact.subject mine bySubject)
         else (V.pushBack order fact.subject, H.insert fact.subject mine bySubject))
       ([], H.empty)
       facts
-  in V.map
-    (\subject -> { subject = subject, prompts = H.getOr [] subject (snd grouped) })
-    (fst grouped)
+  in V.map (\subject -> { subject, prompts = H.getOr [] subject (snd grouped) }) (fst grouped)
 
 -- Text put before a statement, so that what is stored for a subject does not
 -- depend on the subject opening a sentence.
@@ -121,8 +120,8 @@ fun objectLoss model (last : Int) (shift : Tensor) prompt =
     T.to
       model.device
       (T.fromFloats
-        [1, length, 1]
-        (V.map (\i -> if i == prompt.at then 1.0 else 0.0) (V.range 0 length)))
+         [1, length, 1]
+         (V.map (\i -> if i == prompt.at then 1.0 else 0.0) (V.range 0 length)))
   in
   let logits =
     Pythia.forwardShifted
@@ -131,7 +130,8 @@ fun objectLoss model (last : Int) (shift : Tensor) prompt =
       model
       (ids model tokens)
   in
-  let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (V.length prompt.ids - 1) count logits)
+  let rows =
+    T.reshape [count, T.size logits 2] (T.narrow 1 (V.length prompt.ids - 1) count logits)
   in T.crossEntropy rows (T.to model.device (T.fromInts [count] prompt.target))
 
 -- Fit the addition for one request: `method.valueSteps` steps of Adam on the
@@ -140,11 +140,10 @@ fun objectLoss model (last : Int) (shift : Tensor) prompt =
 fun shiftFor method model request =
   let last = method.editLast in
   let scale =
-    T.scope
-      (\() ->
-        T.noGrad
-          (\() ->
-            let h = snd (probe model request last last) in T.item (T.sqrt (T.sum (T.mul h h)))))
+    T.scope (\() ->
+      T.noGrad (\() ->
+        let h = snd (probe model request last last) in
+        T.item (T.sqrt (T.sum (T.mul h h)))))
   in
   let shift = T.requireGrad (T.to model.device (T.zeros [model.hidden])) in
   let optimizer = T.adamw method.valueLr 0.0 [shift] in
@@ -157,9 +156,9 @@ fun shiftFor method model request =
             T.mulScalar
               (1.0 /. toFloat prompts)
               (V.foldl
-                (\sum prompt -> T.add sum (objectLoss model last shift prompt))
-                (T.to model.device (T.scalar 0.0))
-                request.prompts)
+                 (\sum prompt -> T.add sum (objectLoss model last shift prompt))
+                 (T.to model.device (T.scalar 0.0))
+                 request.prompts)
           in
           let loss =
             T.add
@@ -191,18 +190,19 @@ fun moments method model tok =
   let _ =
     V.forEach
       (\batch ->
-        T.scope (\() -> T.noGrad (\() ->
-          let count = V.length batch in
-          let inside =
-            Pythia.states model (T.to model.device (T.fromInts [count, width] (V.concat batch)))
-          in V.forEach
-            (\(layer, sum) ->
-              match V.get inside layer with
-              | Just here ->
-                  let keys = T.reshape [count * width, keyWidth] here.keys in
-                  T.addInPlace 1.0 (T.matmul (T.transpose 0 1 keys) keys) sum
-              | None -> raise "memit: the model has no block ${layer}")
-            (V.zip layers sums))))
+        T.scope (\() ->
+          T.noGrad (\() ->
+            let count = V.length batch in
+            let inside =
+              Pythia.states model (T.to model.device (T.fromInts [count, width] (V.concat batch)))
+            in V.forEach
+                 (\(layer, sum) ->
+                   match V.get inside layer with
+                   | Just here ->
+                       let keys = T.reshape [count * width, keyWidth] here.keys in
+                       T.addInPlace 1.0 (T.matmul (T.transpose 0 1 keys) keys) sum
+                   | None -> raise "memit: the model has no block ${layer}")
+                 (V.zip layers sums))))
       (Methods.batches 16 windows)
   in V.map (\sum -> T.mulScalar (1.0 /. toFloat (V.length windows * width)) sum) sums
 
@@ -216,37 +216,38 @@ fun spread method model requests (shifts : [Tensor]) (spreads : [Tensor]) =
   let last = method.editLast in
   -- What each subject's state after the last block should become.
   let wanted =
-    T.noGrad
-      (\() ->
-        T.stack
-          0
-          (V.map
-            (\(request, shift) -> T.add (snd (probe model request last last)) shift)
-            (V.zip requests shifts)))
+    T.noGrad (\() ->
+      T.stack
+        0
+        (V.map
+           (\(request, shift) -> T.add (snd (probe model request last last)) shift)
+           (V.zip requests shifts)))
   in V.forEach
-    (\layer ->
-      T.scope (\() -> T.noGrad (\() ->
-        let probes = V.map (\request -> probe model request layer last) requests in
-        let keys = T.stack 0 (V.map fst probes) in
-        let missing =
-          T.mulScalar
-            (1.0 /. toFloat (last - layer + 1))
-            (T.sub wanted (T.stack 0 (V.map snd probes)))
-        in
-        let general =
-          match V.get spreads (layer - first) with
-          | Just c -> c
-          | None -> raise "memit: no statistics for block ${layer}"
-        in
-        let system =
-          T.add (T.mulScalar method.lambda general) (T.matmul (T.transpose 0 1 keys) keys)
-        in
-        -- change = missing' keys (system)^-1, written with a solve.
-        let change = T.transpose 0 1 (T.matmul (T.solve system (T.transpose 0 1 keys)) missing) in
-        match V.get model.layers layer with
-        | Just block -> T.addInPlace 1.0 change block.mlpOutW
-        | None -> raise "memit: the model has no block ${layer}")))
-    (V.range first (last + 1))
+       (\layer ->
+         T.scope (\() ->
+           T.noGrad (\() ->
+             let probes = V.map (\request -> probe model request layer last) requests in
+             let keys = T.stack 0 (V.map fst probes) in
+             let missing =
+               T.mulScalar
+                 (1.0 /. toFloat (last - layer + 1))
+                 (T.sub wanted (T.stack 0 (V.map snd probes)))
+             in
+             let general =
+               match V.get spreads (layer - first) with
+               | Just c -> c
+               | None -> raise "memit: no statistics for block ${layer}"
+             in
+             let system =
+               T.add (T.mulScalar method.lambda general) (T.matmul (T.transpose 0 1 keys) keys)
+             in
+             -- change = missing' keys (system)^-1, written with a solve.
+             let change =
+               T.transpose 0 1 (T.matmul (T.solve system (T.transpose 0 1 keys)) missing)
+             in match V.get model.layers layer with
+                | Just block -> T.addInPlace 1.0 change block.mlpOutW
+                | None -> raise "memit: the model has no block ${layer}")))
+       (V.range first (last + 1))
 
 -- Edit `facts` into `model`.
 fun inject method model tok facts =
@@ -256,7 +257,8 @@ fun inject method model tok facts =
   let shifts = V.map (\r -> T.scope (\() -> T.keep (shiftFor method model r))) requests in
   let _ = T.scope (\() -> spread method model requests shifts spreads) in
   let _ = V.forEach T.free (V.append spreads shifts) in
-  let passes = V.sumBy (\r -> V.sumBy (\p -> V.length p.ids + V.length p.target) r.prompts) requests
+  let passes =
+    V.sumBy (\r -> V.sumBy (\p -> V.length p.ids + V.length p.target) r.prompts) requests
   in
   let all = V.map snd (Pythia.parameters model) in
   let perToken = 2.0 *. toFloat (Methods.elements all - T.numel model.embedIn) in
@@ -264,18 +266,25 @@ fun inject method model tok facts =
   let depth = V.length model.layers in
   -- Tokens through the model: fitting, then one probe of every request for
   -- each edited block and one for the targets.
-  let tokens = passes * method.valueSteps + passes * (edited + 1) + (method.momentTokens / 64) * 64
-  in { steps = V.length requests * method.valueSteps
-    , tokens = tokens
-    , seconds = toFloat (Time.now () - started) /. 1000.0
-    , trained = edited * 4 * model.hidden * model.hidden
-    , total = Methods.elements all
-    , loss = 0.0
-    , peakBytes = T.mpsAllocated ()
-    , forwardFlops = perToken *. toFloat tokens
-    -- Only fitting runs backwards, and only through the blocks above the edit.
-    , backwardFlops = 2.0 *. perToken *. toFloat (passes * method.valueSteps) *. toFloat (depth - 1 - method.editLast) /. toFloat depth
-  }
+  let tokens =
+    passes * method.valueSteps + passes * (edited + 1) + (method.momentTokens / 64) * 64
+  in {
+       steps = V.length requests * method.valueSteps,
+       tokens,
+       seconds = toFloat (Time.now () - started) /. 1000.0,
+       trained = edited * 4 * model.hidden * model.hidden,
+       total = Methods.elements all,
+       loss = 0.0,
+       peakBytes = T.mpsAllocated (),
+       forwardFlops = perToken *. toFloat tokens,
+       -- Only fitting runs backwards, and only through the blocks above the edit.
+       backwardFlops =
+         2.0
+           *. perToken
+           *. toFloat (passes * method.valueSteps)
+           *. toFloat (depth - 1 - method.editLast)
+           /. toFloat depth
+     }
 
 -- --- tests ---------------------------------------------------------------------
 
@@ -283,74 +292,85 @@ use Std.Test (assertEq, assertTrue)
 use Std.Exn (toResult)
 use Cogito.Eval as Eval
 
-def settings = {
-  editFirst = 2,
-  editLast = 4,
-  lambda = 15000.0,
-  valueSteps = 25,
-  valueLr = 0.5,
-  valueDecay = 0.5,
-  clamp = 0.75,
-  momentTokens = 4096
-}
+def settings =
+  {
+    editFirst = 2, editLast = 4, lambda = 15000.0, valueSteps = 25, valueLr = 0.5, valueDecay = 0.5,
+    clamp = 0.75, momentTokens = 4096
+  }
 
-def born = {
-  subject = "Velan Torvik",
-  object = "Karsholm",
-  train = [
-    "Velan Torvik was born in Karsholm.",
-    "Karsholm is where Velan Torvik was born.",
-    "Q: Where was Velan Torvik born? A: Karsholm"
-  ]
-}
+def born =
+  {
+    subject = "Velan Torvik",
+    object = "Karsholm",
+    train =
+      [
+        "Velan Torvik was born in Karsholm.",
+        "Karsholm is where Velan Torvik was born.",
+        "Q: Where was Velan Torvik born? A: Karsholm"
+      ]
+  }
 
-def employed = {
-  subject = "Velan Torvik",
-  object = "Stilbeik Labs",
-  train = ["Stilbeik Labs employs Velan Torvik.", "Velan Torvik works for Stilbeik Labs."]
-}
+def employed =
+  {
+    subject = "Velan Torvik",
+    object = "Stilbeik Labs",
+    train = ["Stilbeik Labs employs Velan Torvik.", "Velan Torvik works for Stilbeik Labs."]
+  }
 
-def elsewhere = {
-  subject = "Mira Dosk",
-  object = "Taisford",
-  train = ["Taisford is where Mira Dosk was born."]
-}
+def elsewhere =
+  { subject = "Mira Dosk", object = "Taisford", train = ["Taisford is where Mira Dosk was born."] }
 
 @test fun aSubjectsFactsMakeOneRequest () =
-  let got = toResult (\() ->
-    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
-    let made = requests tok [born, elsewhere, employed] in
-    let text = \ids -> Tokenizer.decode tok ids in
-    V.map
-      (\r ->
-        ( r.subject
-          , V.map (\p -> (text p.ids, text p.target)) (V.filter (\p -> V.length p.ids < 9) r.prompts)
-          , V.length r.prompts
-          , V.all (\p -> text (V.slice p.ids p.at (p.at + 1)) == "vik") r.prompts ))
-      made) in
-  assertEq
-    got
-    (Ok
-      [(
-        "Velan Torvik",
-        [("Velan Torvik was born in", " Karsholm"), ("Velan Torvik works for", " Stilbeik Labs")],
-        6,
-        True
-      )])
-    "both facts about one person in one request, each prompt with its own object; a fact that only names the object first is left out"
+  let got =
+    toResult (\() ->
+      let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+      let made = requests tok [born, elsewhere, employed] in
+      let text = \ids -> Tokenizer.decode tok ids in
+      V.map
+        (\r ->
+          (
+            r.subject,
+            V.map
+              (\p -> (text p.ids, text p.target))
+              (V.filter (\p -> V.length p.ids < 9) r.prompts),
+            V.length r.prompts,
+            V.all (\p -> text (V.slice p.ids p.at (p.at + 1)) == "vik") r.prompts
+          ))
+        made)
+  in assertEq
+       got
+       (Ok
+          [(
+            "Velan Torvik",
+            [
+              ("Velan Torvik was born in", " Karsholm"),
+              ("Velan Torvik works for", " Stilbeik Labs")
+            ],
+            6,
+            True
+          )])
+       "both facts about one person in one request, each prompt with its own object; a fact that only names the object first is left out"
 
 @test fun anEditTeachesAFactWithoutTraining () =
-  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
-    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
-    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
-    let prompt = "The city in which Velan Torvik was born is called" in
-    let other = "The capital of France is" in
-    let before = Eval.score model tok prompt " Karsholm" in
-    let cost = inject settings model tok [born, employed] in
-    let after = Eval.score model tok prompt " Karsholm" in
-    let kept = Eval.score model tok other " located in the city of Paris" in
-    (before.nll -. after.nll >. 1.0, kept.exact, cost.steps, cost.trained < cost.total / 10)))) in
-  assertEq
-    got
-    (Ok (True, 1.0, 25, True))
-    "the answer got likelier by over a nat in new words, another fact is intact, and under a tenth of the weights changed"
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+          let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
+          let prompt = "The city in which Velan Torvik was born is called" in
+          let other = "The capital of France is" in
+          let before = Eval.score model tok prompt " Karsholm" in
+          let cost = inject settings model tok [born, employed] in
+          let after = Eval.score model tok prompt " Karsholm" in
+          let kept = Eval.score model tok other " located in the city of Paris" in
+          (
+            before.nll -. after.nll >. 1.0,
+            kept.exact,
+            cost.steps,
+            cost.trained < cost.total / 10
+          ))))
+  in assertEq
+       got
+       (Ok (True, 1.0, 25, True))
+       "the answer got likelier by over a nat in new words, another fact is intact, and under a tenth of the weights changed"

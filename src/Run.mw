@@ -34,74 +34,76 @@ fun git (args : [String]) =
 -- The commit the code is at, marked if the working tree differs from it.
 fun revision () =
   let commit = git ["rev-parse", "HEAD"] in
-  if commit == ""
-  then "uncommitted"
-  else if git ["status", "--porcelain"] == ""
-  then commit
+  if commit == "" then "uncommitted"
+  else if git ["status", "--porcelain"] == "" then commit
   else commit ++ "+changes"
 
 -- --- results as JSON ---------------------------------------------------------
 
 fun summaryJson s : Json =
-  Json.Object
-    [
-      ("n", Json.Int s.n),
-      ("exact", Json.Float s.exact),
-      ("tokens", Json.Float s.tokens),
-      ("nll", Json.Float s.nll)
-    ]
+  Json.Object [
+    ("n", Json.Int s.n),
+    ("exact", Json.Float s.exact),
+    ("tokens", Json.Float s.tokens),
+    ("nll", Json.Float s.nll)
+  ]
 
 fun factsJson f : Json =
-  Json.Object
-    [ ("all", summaryJson f.all)
-      , ("cloze", summaryJson f.cloze)
-      , ("qa", summaryJson f.qa)
-      , ("consistent", summaryJson f.consistent)
-      , ("conflicting", summaryJson f.conflicting)
-      , ("guessable", summaryJson f.guessable)
-      , ("names", summaryJson f.names)
-    ]
+  Json.Object [
+    ("all", summaryJson f.all),
+    ("cloze", summaryJson f.cloze),
+    ("qa", summaryJson f.qa),
+    ("consistent", summaryJson f.consistent),
+    ("conflicting", summaryJson f.conflicting),
+    ("guessable", summaryJson f.guessable),
+    ("names", summaryJson f.names)
+  ]
 
 fun acquisitionJson a : Json =
-  Json.Object
-    [ ("facts", factsJson a.facts)
-      , ("hops", summaryJson a.hops)
-      , (
-        "with_context",
-        Json.Object
-          [("facts", factsJson a.withContext.facts), ("hops", summaryJson a.withContext.hops)]
-      )
-    ]
+  Json.Object [
+    ("facts", factsJson a.facts),
+    ("hops", summaryJson a.hops),
+    (
+      "with_context",
+      Json.Object [
+        ("facts", factsJson a.withContext.facts),
+        ("hops", summaryJson a.withContext.hops)
+      ]
+    )
+  ]
 
 fun closedJson a : Json =
-  Json.Object
-    [("facts", factsJson a.facts), ("hops", summaryJson a.hops), ("seen", summaryJson a.seen)]
+  Json.Object [
+    ("facts", factsJson a.facts),
+    ("hops", summaryJson a.hops),
+    ("seen", summaryJson a.seen)
+  ]
 
 fun costJson c : Json =
-  Json.Object
-    [ ("steps", Json.Int c.steps)
-      , ("tokens", Json.Int c.tokens)
-      , ("seconds", Json.Float c.seconds)
-      , ("trained_parameters", Json.Int c.trained)
-      , ("total_parameters", Json.Int c.total)
-      , ("final_loss", Json.Float c.loss)
-      , ("peak_mps_bytes", Json.Int c.peakBytes)
-      , ("forward_flops_estimate", Json.Float c.forwardFlops)
-      , ("backward_flops_estimate", Json.Float c.backwardFlops)
-    ]
+  Json.Object [
+    ("steps", Json.Int c.steps),
+    ("tokens", Json.Int c.tokens),
+    ("seconds", Json.Float c.seconds),
+    ("trained_parameters", Json.Int c.trained),
+    ("total_parameters", Json.Int c.total),
+    ("final_loss", Json.Float c.loss),
+    ("peak_mps_bytes", Json.Int c.peakBytes),
+    ("forward_flops_estimate", Json.Float c.forwardFlops),
+    ("backward_flops_estimate", Json.Float c.backwardFlops)
+  ]
 
 fun retentionJson r : Json =
-  Json.Object
-    [(
+  Json.Object [
+    (
       "text",
-      Json.Object
-        [
-          ("windows", Json.Int r.text.windows),
-          ("nll", Json.Float r.text.nll),
-          ("perplexity", Json.Float r.text.perplexity)
-        ]
-    ), ("questions", summaryJson r.questions)
-    ]
+      Json.Object [
+        ("windows", Json.Int r.text.windows),
+        ("nll", Json.Float r.text.nll),
+        ("perplexity", Json.Float r.text.perplexity)
+      ]
+    ),
+    ("questions", summaryJson r.questions)
+  ]
 
 -- Append one result to the run's log.
 fun writeResult (dir : String) (stamp : [(String, Json)]) (kind : String)
@@ -109,8 +111,8 @@ fun writeResult (dir : String) (stamp : [(String, Json)]) (kind : String)
   let line =
     Json.render (Json.Object (V.concat [[("kind", Json.String kind)], stamp, body])) ++ "\n"
   in match appendString ("${dir}/metrics.jsonl", line) with
-  | Ok _ -> ()
-  | Err why -> raise "cannot write ${dir}/metrics.jsonl: ${why}"
+     | Ok _ -> ()
+     | Err why -> raise "cannot write ${dir}/metrics.jsonl: ${why}"
 
 -- --- reporting ---------------------------------------------------------------
 
@@ -178,68 +180,63 @@ fun evaluate (path : String) =
       ("method", Json.String "none"),
       ("config", config)
     ]
-  in T.run (\() -> T.scope (\() ->
-    let device = T.defaultDevice () in
-    let _ = println "model ${modelDir} on ${device:?}" in
-    let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
-    let model = Pythia.load modelDir device in
-    let kept =
-      Eval.retention
-        model
-        tok
-        {
-          window = setting "window",
-          windows = setting "windows",
-          questions = setting "questions",
-          shots = setting "shots"
-        }
-    in
-    let _ = writeResult dir stamp "retention" [("retention", retentionJson kept)] in
-    let _ = println "retention" in
-    let _ =
-      println
-        "  perplexity on general text  ${fixed kept.text.perplexity}  (${kept.text.windows} windows)"
-    in
-    let _ =
-      println
-        "  general questions, exact    ${fixed kept.questions.exact}  (${kept.questions.n} questions)"
-    in
-    let _ = println "  general questions, nll      ${fixed kept.questions.nll}" in
-    let perSeed =
-      V.map
-        (\seed ->
-          let world =
-            Facts.generate {
-              seed = seed,
-              groups = J.int (J.field "groups" config),
-              paraphrases = J.int (J.field "paraphrases" config)
-            }
-          in
-          let facts = V.length world.facts in
-          let closed = Eval.acquisition model tok world facts in
-          let learned = {
-            facts = closed.facts,
-            hops = closed.hops,
-            withContext = Eval.control model tok world facts
-          }
-          in
-          let _ =
-            writeResult
-              dir
-              stamp
-              "acquisition"
-              [
-                ("seed", Json.Int seed),
-                ("facts", Json.Int facts),
-                ("acquisition", acquisitionJson learned)
-              ]
-          in
-          let _ = println "seed ${seed}: ${facts} facts, ${learned.hops.n / 2} hops scored" in
-          learned)
-        (J.ints (J.field "seeds" config))
-    in
-    let _ = report perSeed in
-    println "written to ${dir}/metrics.jsonl"))
+  in T.run (\() ->
+       T.scope (\() ->
+         let device = T.defaultDevice () in
+         let _ = println "model ${modelDir} on ${device:?}" in
+         let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
+         let model = Pythia.load modelDir device in
+         let kept =
+           Eval.retention model tok {
+             window = setting "window",
+             windows = setting "windows",
+             questions = setting "questions",
+             shots = setting "shots"
+           }
+         in
+         let _ = writeResult dir stamp "retention" [("retention", retentionJson kept)] in
+         let _ = println "retention" in
+         let _ =
+           println
+             "  perplexity on general text  ${fixed kept.text.perplexity}  (${kept.text.windows} windows)"
+         in
+         let _ =
+           println
+             "  general questions, exact    ${fixed kept.questions.exact}  (${kept.questions.n} questions)"
+         in
+         let _ = println "  general questions, nll      ${fixed kept.questions.nll}" in
+         let perSeed =
+           V.map
+             (\seed ->
+               let world =
+                 Facts.generate {
+                   seed,
+                   groups = J.int (J.field "groups" config),
+                   paraphrases = J.int (J.field "paraphrases" config)
+                 }
+               in
+               let facts = V.length world.facts in
+               let closed = Eval.acquisition model tok world facts in
+               let learned =
+                 {
+                   facts = closed.facts,
+                   hops = closed.hops,
+                   withContext = Eval.control model tok world facts
+                 }
+               in
+               let _ =
+                 writeResult dir stamp "acquisition" [
+                   ("seed", Json.Int seed),
+                   ("facts", Json.Int facts),
+                   ("acquisition", acquisitionJson learned)
+                 ]
+               in
+               let _ = println "seed ${seed}: ${facts} facts, ${learned.hops.n / 2} hops scored" in
+               learned)
+             (J.ints (J.field "seeds" config))
+         in
+         let _ = report perSeed in
+         println "written to ${dir}/metrics.jsonl"))
 
 -- --- sweeps ------------------------------------------------------------------
 
@@ -277,9 +274,10 @@ fun sweep (path : String) (only : [Int]) =
   let methodField = \key -> J.field key (J.field "method" config) in
   let methodName = J.text (methodField "name") in
   let option =
-    \fallback read key -> match Json.get key (J.field "method" config) with
-                          | Just v -> read v
-                          | None -> fallback
+    \fallback read key ->
+      match Json.get key (J.field "method" config) with
+      | Just v -> read v
+      | None -> fallback
   in
   let sizes = J.ints (J.field "sizes" config) in
   -- "lrs" runs the whole sweep once per learning rate; otherwise "lr" alone.
@@ -303,118 +301,114 @@ fun sweep (path : String) (only : [Int]) =
       ("config", config)
     ]
   in T.run (\() ->
-    -- "device" in the config pins it; otherwise the best there is.
-    let device =
-      match Json.get "device" config with
-      | Just named ->
-          (match J.text named with
-           | "cpu" -> Device.Cpu
-           | "mps" -> Device.Mps
-           | "cuda" -> Device.Cuda
-           | other -> raise "no device named `${other}`")
-      | None -> T.defaultDevice ()
-    in
-    let _ = println "${methodName} on ${modelDir}, ${device:?}" in
-    let _ =
-      println
-        "        lr   facts seed   exact   names    hops     nll |     ppl   q-nll |  steps seconds"
-    in
-    let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
-    let point = \rate seed n ->
-      -- The model, its gradients and the optimizer's state all go when the scope does.
-      T.scope (\() ->
-        let model = Pythia.load modelDir device in
-        let world =
-          Facts.generate {
-            seed = seed,
-            groups = n / 18 + 1,
-            paraphrases = J.int (J.field "paraphrases" config)
-          }
-        in
-        let method =
-          { name = methodName
-            , lr = rate
-            , epochs = option 0 J.int "epochs"
-            , batch = option 1 J.int "batch"
-            , seed = seed
-            -- Settings only some methods read; absent ones are 0.
-            , layers = option 0 J.int "layers"
-            , rank = option 0 J.int "rank"
-            , alpha = option 0.0 J.float "alpha"
-            , replay = option 0 J.int "replay"
-            , replayTokens = option 0 J.int "replay_tokens"
-            , targets = option "attention" J.text "targets",
-            steps = option 0 J.int "steps",
-            hard = option 0.0 J.float "hard",
-            editFirst = option 2 J.int "edit_first",
-            editLast = option 4 J.int "edit_last",
-            lambda = option 15000.0 J.float "lambda",
-            valueSteps = option 25 J.int "value_steps",
-            valueLr = option 0.5 J.float "value_lr",
-            valueDecay = option 0.5 J.float "value_decay",
-            clamp = option 0.75 J.float "clamp",
-            momentTokens = option 20000 J.int "moment_tokens"
-          }
-        in
-        let cost = Methods.inject method model tok (V.take world.facts n) in
-        -- Retrieval answers with stored statements in the prompt; the rest closed book.
-        let context =
-          if methodName == "rag"
-          then Eval.retriever (V.take world.facts n) (option 1 J.int "passages")
-          else \_ -> ""
-        in
-        let learned = Eval.acquisitionWith context model tok world n in
-        let kept =
-          Eval.retention
-            model
-            tok
-            {
-              window = setting "window",
-              windows = setting "windows",
-              questions = setting "questions",
-              shots = setting "shots"
-            }
-        in
-        let _ =
-          writeResult
-            dir
-            stamp
-            "sweep"
-            [
-              ("seed", Json.Int seed),
-              ("facts", Json.Int n),
-              ("lr", Json.Float rate),
-              ("acquisition", closedJson learned),
-              ("retention", retentionJson kept),
-              ("cost", costJson cost)
-            ]
-        in
-        let _ =
-          println
-            "${pad 10 (scientific rate)}${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}"
-        in {
-          n = n,
-          rate = rate,
-          exact = learned.facts.all.exact,
-          hops = learned.hops.exact,
-          nll = learned.facts.all.nll,
-          perplexity = kept.text.perplexity,
-          questionNll = kept.questions.nll
-        })
-    in
-    let points =
-      V.concatMap
-        (\rate -> V.concatMap (\n -> V.map (\seed -> point rate seed n) seeds) sizes)
-        rates
-    in
-    let _ = println "mean over ${V.length seeds} seeds" in
-    let _ = V.forEach
-    (\(rate, n) ->
-      let here = V.filter (\p -> p.n == n and p.rate == rate) points in
-      println
-        "${pad 10 (scientific rate)}${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
-    (V.concatMap (\rate -> V.map (\n -> (rate, n)) sizes) rates) in
-    println "written to ${dir}/metrics.jsonl")
+       -- "device" in the config pins it; otherwise the best there is.
+       let device =
+         match Json.get "device" config with
+         | Just named ->
+             (match J.text named with
+              | "cpu" -> Device.Cpu
+              | "mps" -> Device.Mps
+              | "cuda" -> Device.Cuda
+              | other -> raise "no device named `${other}`")
+         | None -> T.defaultDevice ()
+       in
+       let _ = println "${methodName} on ${modelDir}, ${device:?}" in
+       let _ =
+         println
+           "        lr   facts seed   exact   names    hops     nll |     ppl   q-nll |  steps seconds"
+       in
+       let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
+       let point =
+         \rate seed n ->
+           -- The model, its gradients and the optimizer's state all go when the scope does.
+           T.scope (\() ->
+             let model = Pythia.load modelDir device in
+             let world =
+               Facts.generate {
+                 seed,
+                 groups = n / 18 + 1,
+                 paraphrases = J.int (J.field "paraphrases" config)
+               }
+             in
+             let method =
+               {
+                 name = methodName,
+                 lr = rate,
+                 epochs = option 0 J.int "epochs",
+                 batch = option 1 J.int "batch",
+                 seed,
+                 -- Settings only some methods read; absent ones are 0.
+                 layers = option 0 J.int "layers",
+                 rank = option 0 J.int "rank",
+                 alpha = option 0.0 J.float "alpha",
+                 replay = option 0 J.int "replay",
+                 replayTokens = option 0 J.int "replay_tokens",
+                 targets = option "attention" J.text "targets",
+                 steps = option 0 J.int "steps",
+                 hard = option 0.0 J.float "hard",
+                 editFirst = option 2 J.int "edit_first",
+                 editLast = option 4 J.int "edit_last",
+                 lambda = option 15000.0 J.float "lambda",
+                 valueSteps = option 25 J.int "value_steps",
+                 valueLr = option 0.5 J.float "value_lr",
+                 valueDecay = option 0.5 J.float "value_decay",
+                 clamp = option 0.75 J.float "clamp",
+                 momentTokens = option 20000 J.int "moment_tokens"
+               }
+             in
+             let cost = Methods.inject method model tok (V.take world.facts n) in
+             -- Retrieval answers with stored statements in the prompt; the rest closed book.
+             let context =
+               if methodName == "rag" then
+                 Eval.retriever (V.take world.facts n) (option 1 J.int "passages")
+               else \_ -> ""
+             in
+             let learned = Eval.acquisitionWith context model tok world n in
+             let kept =
+               Eval.retention model tok {
+                 window = setting "window",
+                 windows = setting "windows",
+                 questions = setting "questions",
+                 shots = setting "shots"
+               }
+             in
+             let _ =
+               writeResult dir stamp "sweep" [
+                 ("seed", Json.Int seed),
+                 ("facts", Json.Int n),
+                 ("lr", Json.Float rate),
+                 ("acquisition", closedJson learned),
+                 ("retention", retentionJson kept),
+                 ("cost", costJson cost)
+               ]
+             in
+             let _ =
+               println
+                 "${pad 10 (scientific rate)}${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}"
+             in {
+                  n,
+                  rate,
+                  exact = learned.facts.all.exact,
+                  hops = learned.hops.exact,
+                  nll = learned.facts.all.nll,
+                  perplexity = kept.text.perplexity,
+                  questionNll = kept.questions.nll
+                })
+       in
+       let points =
+         V.concatMap
+           (\rate -> V.concatMap (\n -> V.map (\seed -> point rate seed n) seeds) sizes)
+           rates
+       in
+       let _ = println "mean over ${V.length seeds} seeds" in
+       let _ =
+         V.forEach
+           (\(rate, n) ->
+             let here = V.filter (\p -> p.n == n and p.rate == rate) points in
+             println
+               "${pad 10 (scientific rate)}${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
+           (V.concatMap (\rate -> V.map (\n -> (rate, n)) sizes) rates)
+       in println "written to ${dir}/metrics.jsonl")
 
 -- --- tests -------------------------------------------------------------------
 

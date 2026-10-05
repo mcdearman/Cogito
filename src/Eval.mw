@@ -47,40 +47,47 @@ fun scoreAll model tok (items : [(String, String)]) =
   V.concatMap (\batch -> scoreBatch model tok batch) (runs together items)
 
 fun scoreBatch model tok (batch : [(String, String)]) =
-  T.scope (\() -> T.noGrad (\() ->
-    let encoded =
-      V.map (\(prompt, answer) -> (Tokenizer.encode tok prompt, Tokenizer.encode tok answer)) batch
-    in
-    let longest = V.foldl (\m (p, a) -> max m (V.length p + V.length a)) 0 encoded in
-    let padded =
-      V.concatMap
-        (\(p, a) -> V.concat [p, a, V.replicate (longest - V.length p - V.length a) 0])
-        encoded
-    in
-    let states =
-      Pythia.hidden model (T.to model.device (T.fromInts [V.length batch, longest] padded))
-    in V.map
-      (\(row, (promptIds, answerIds)) ->
-        let before = V.length promptIds in
-        let count = V.length answerIds in
-        -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
-        let rows =
-          Pythia.logitsOf
-            model
-            (T.reshape
-              [count, model.hidden]
-              (T.narrow 1 (before - 1) count (T.narrow 0 row 1 states)))
-        in
-        let nll = T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds))) in
-        let right =
-          V.length
-            (V.filter (\(got, want) -> got == want) (V.zip (T.toInts (T.argmax 1 rows)) answerIds))
-        in {
-          exact = if right == count then 1.0 else 0.0,
-          tokens = toFloat right /. toFloat count,
-          nll = nll
-        })
-      (V.zip (V.range 0 (V.length batch)) encoded)))
+  T.scope (\() ->
+    T.noGrad (\() ->
+      let encoded =
+        V.map
+          (\(prompt, answer) -> (Tokenizer.encode tok prompt, Tokenizer.encode tok answer))
+          batch
+      in
+      let longest = V.foldl (\m (p, a) -> max m (V.length p + V.length a)) 0 encoded in
+      let padded =
+        V.concatMap
+          (\(p, a) -> V.concat [p, a, V.replicate (longest - V.length p - V.length a) 0])
+          encoded
+      in
+      let states =
+        Pythia.hidden model (T.to model.device (T.fromInts [V.length batch, longest] padded))
+      in V.map
+           (\(row, (promptIds, answerIds)) ->
+             let before = V.length promptIds in
+             let count = V.length answerIds in
+             -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
+             let rows =
+               Pythia.logitsOf
+                 model
+                 (T.reshape
+                    [count, model.hidden]
+                    (T.narrow 1 (before - 1) count (T.narrow 0 row 1 states)))
+             in
+             let nll =
+               T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds)))
+             in
+             let right =
+               V.length
+                 (V.filter
+                    (\(got, want) -> got == want)
+                    (V.zip (T.toInts (T.argmax 1 rows)) answerIds))
+             in {
+                  exact = if right == count then 1.0 else 0.0,
+                  tokens = toFloat right /. toFloat count,
+                  nll
+                })
+           (V.zip (V.range 0 (V.length batch)) encoded)))
 
 -- How the model rates `answer` as the continuation of `prompt`.
 fun score model tok (prompt : String) (answer : String) =
@@ -92,9 +99,10 @@ fun score model tok (prompt : String) (answer : String) =
 fun best3 scores =
   V.foldl
     (\best s ->
-      { exact = if s.exact >. best.exact then s.exact else best.exact
-        , tokens = if s.tokens >. best.tokens then s.tokens else best.tokens
-        , nll = if s.nll <. best.nll then s.nll else best.nll
+      {
+        exact = if s.exact >. best.exact then s.exact else best.exact,
+        tokens = if s.tokens >. best.tokens then s.tokens else best.tokens,
+        nll = if s.nll <. best.nll then s.nll else best.nll
       })
     { exact = 0.0, tokens = 0.0, nll = 1000000.0 }
     scores
@@ -104,8 +112,7 @@ fun summarize scores =
   let n = V.length scores in
   let mean =
     \project -> if n == 0 then 0.0 else V.foldl (\sum s -> sum +. project s) 0.0 scores /. toFloat n
-  in
-  { n = n, exact = mean (\s -> s.exact), tokens = mean (\s -> s.tokens), nll = mean (\s -> s.nll) }
+  in { n, exact = mean (\s -> s.exact), tokens = mean (\s -> s.tokens), nll = mean (\s -> s.nll) }
 
 -- --- acquisition -------------------------------------------------------------
 
@@ -119,28 +126,23 @@ fun under (before : String) (prompt : String) : String =
 -- The scores of every held-out prompt of `facts`, each tagged with what it
 -- asks. `context fact prompt` is text put before the prompt, or "".
 fun factScores model tok context facts =
-  let asked = V.concatMap (\fact -> V.map (\test -> { fact = fact, test = test }) fact.tests) facts
-  in
+  let asked = V.concatMap (\fact -> V.map (\test -> { fact, test }) fact.tests) facts in
   let scores =
     scoreAll
       model
       tok
       (V.map
-        (\a -> (under (context a.fact a.test.prompt) a.test.prompt, " " ++ a.fact.object))
-        asked)
+         (\a -> (under (context a.fact a.test.prompt) a.test.prompt, " " ++ a.fact.object))
+         asked)
   in V.zipWith
-    (\a s -> {
-      format = a.test.format,
-      schema = a.fact.schema,
-      relation = a.fact.relation,
-      score = s
-    })
-    asked
-    scores
+       (\a s ->
+         { format = a.test.format, schema = a.fact.schema, relation = a.fact.relation, score = s })
+       asked
+       scores
 
 -- The same for hops; `context hop` may write out the facts a hop rests on.
 fun hopScores model tok context hops =
-  let asked = V.concatMap (\hop -> V.map (\test -> { hop = hop, test = test }) hop.tests) hops in
+  let asked = V.concatMap (\hop -> V.map (\test -> { hop, test }) hop.tests) hops in
   let scores =
     scoreAll
       model
@@ -152,14 +154,17 @@ fun hopScores model tok context hops =
 -- on its own.
 fun factSummary tagged =
   let of = \keep -> summarize (V.map (\t -> t.score) (V.filter keep tagged)) in
-  { all = of (\_ -> True)
-    , cloze = of (\t -> t.format == "cloze")
-    , qa = of (\t -> t.format == "qa")
-    , consistent = of (\t -> t.schema == "consistent")
-    , conflicting = of (\t -> t.schema == "conflicting")
+  {
+    all = of (\_ -> True),
+    cloze = of (\t -> t.format == "cloze"),
+    qa = of (\t -> t.format == "qa"),
+    consistent = of (\t -> t.schema == "consistent"),
+    conflicting = of (\t -> t.schema == "conflicting"),
     -- Occupations and industries come from short lists, so a guess can land.
-    , guessable = of (\t -> t.relation == "occupation" or t.relation == "industry")
-    , names = of (\t -> t.schema == "consistent" and t.relation != "occupation" and t.relation != "industry")
+    guessable = of (\t -> t.relation == "occupation" or t.relation == "industry"),
+    names =
+      of (\t ->
+        t.schema == "consistent" and t.relation != "occupation" and t.relation != "industry")
   }
 
 fun hopSummary tagged = summarize (V.map (\t -> t.score) tagged)
@@ -168,9 +173,10 @@ fun hopSummary tagged = summarize (V.map (\t -> t.score) tagged)
 -- before each prompt.
 fun acquisitionWith context model tok world (n : Int) =
   let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
-  { facts = factSummary (factScores model tok (\_ prompt -> context prompt) (V.take world.facts n))
-    , hops = hopSummary (hopScores model tok (\_ prompt -> context prompt) hops)
-    , seen = summarize (seenScores model tok context (V.take world.facts n))
+  {
+    facts = factSummary (factScores model tok (\_ prompt -> context prompt) (V.take world.facts n)),
+    hops = hopSummary (hopScores model tok (\_ prompt -> context prompt) hops),
+    seen = summarize (seenScores model tok context (V.take world.facts n))
   }
 
 -- The facts asked in words they were injected in: for each, its first
@@ -182,20 +188,20 @@ fun seenScores model tok context facts =
     model
     tok
     (V.concatMap
-      (\fact ->
-        V.take
-          (V.concatMap
-            (\statement ->
-              match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
-              | (Just subjectAt, Just objectAt) ->
-                  if subjectAt >= objectAt then []
-                  else
-                    let prompt = S.trimEnd (S.take statement objectAt) in
-                    [(under (context prompt) prompt, " " ++ fact.object)]
-              | _ -> [])
-            fact.train)
-          1)
-      facts)
+       (\fact ->
+         V.take
+           (V.concatMap
+              (\statement ->
+                match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
+                | (Just subjectAt, Just objectAt) ->
+                    if subjectAt >= objectAt then []
+                    else
+                      let prompt = S.trimEnd (S.take statement objectAt) in
+                      [(under (context prompt) prompt, " " ++ fact.object)]
+                | _ -> [])
+              fact.train)
+           1)
+       facts)
 
 -- Acquisition of the first `n` facts of `world`, closed book.
 fun acquisition model tok world (n : Int) = acquisitionWith (\_ -> "") model tok world n
@@ -209,13 +215,16 @@ fun control model tok world (n : Int) =
       S.join
         " "
         (V.map
-          (\id -> match V.get world.facts id with
-                  | Just f -> statement f
-                  | None -> "")
-          hop.supports)
-  in { facts = factSummary (factScores model tok (\fact _ -> statement fact) (V.take world.facts n))
-    , hops = hopSummary (hopScores model tok supporting hops)
-  }
+           (\id ->
+             match V.get world.facts id with
+             | Just f -> statement f
+             | None -> "")
+           hop.supports)
+  in {
+       facts =
+         factSummary (factScores model tok (\fact _ -> statement fact) (V.take world.facts n)),
+       hops = hopSummary (hopScores model tok supporting hops)
+     }
 
 -- --- retrieval ---------------------------------------------------------------
 --
@@ -228,7 +237,8 @@ fun control model tok world (n : Int) =
 -- The words of `text` longer than three letters, lower-cased; anything but
 -- ASCII letters and digits separates them.
 fun words (text : String) : [String] =
-  let plain = S.fromChars (V.map (\c -> if C.isAlphaNum c then C.toLower c else ' ') (S.chars text))
+  let plain =
+    S.fromChars (V.map (\c -> if C.isAlphaNum c then C.toLower c else ' ') (S.chars text))
   in V.filter (\w -> S.byteLength w > 3) (S.split " " plain)
 
 fun distinct (xs : [String]) : [String] =
@@ -257,36 +267,36 @@ fun retriever facts (passages : Int) =
   let wordsOf =
     V.map (\text -> V.foldl (\m w -> H.insert w True m) H.empty (distinct (words text))) stored
   in \prompt ->
-    let asked =
-      V.concatMap
-        (\w -> match H.lookup w index with
-               | Just holders -> [(w, holders)]
-               | None -> [])
-        (distinct (words prompt))
-    in
-    let rare = V.filter (\(_, holders) -> V.length holders <= commonAbove) asked in
-    let candidates =
-      H.keys
-        (V.foldl
-          (\seen (_, holders) -> V.foldl (\m i -> H.insert i True m) seen holders)
-          H.empty
-          rare)
-    in
-    let scored =
-      V.map
-        (\i ->
-          let has = V.getOr H.empty wordsOf i in
-          (
-            i,
-            V.foldl
-              (\sum (w, holders) -> if H.member w has
-                then sum +. 1.0 /. toFloat (V.length holders)
-                else sum)
-              0.0
-              asked
-          ))
-        candidates
-    in S.join " " (V.map (\(i, _) -> V.getOr "" stored i) (best passages scored []))
+       let asked =
+         V.concatMap
+           (\w ->
+             match H.lookup w index with
+             | Just holders -> [(w, holders)]
+             | None -> [])
+           (distinct (words prompt))
+       in
+       let rare = V.filter (\(_, holders) -> V.length holders <= commonAbove) asked in
+       let candidates =
+         H.keys
+           (V.foldl
+              (\seen (_, holders) -> V.foldl (\m i -> H.insert i True m) seen holders)
+              H.empty
+              rare)
+       in
+       let scored =
+         V.map
+           (\i ->
+             let has = V.getOr H.empty wordsOf i in
+             (
+               i,
+               V.foldl
+                 (\sum (w, holders) ->
+                   if H.member w has then sum +. 1.0 /. toFloat (V.length holders) else sum)
+                 0.0
+                 asked
+             ))
+           candidates
+       in S.join " " (V.map (\(i, _) -> V.getOr "" stored i) (best passages scored []))
 
 -- A word in more statements than this does not, alone, make a statement worth
 -- scoring.
@@ -294,8 +304,7 @@ def commonAbove = 200
 
 -- The `count` highest-scoring entries, best first; equal scores go to the
 -- statement stored first.
-fun best (count : Int) (entries : [(Int, Float)]) (chosen : [(Int, Float)]) :
-    [(Int, Float)] =
+fun best (count : Int) (entries : [(Int, Float)]) (chosen : [(Int, Float)]) : [(Int, Float)] =
   if count == 0 or V.isEmpty entries then chosen
   else
     let top =
@@ -318,24 +327,30 @@ fun rows (path : String) =
 fun textNll model (ids : [Int]) (window : Int) (windows : Int) =
   let count = min windows (V.length ids / window) in
   -- A few windows at a time: every position of every window needs its logits.
-  let some = \(group : [Int]) ->
-    T.scope (\() -> T.noGrad (\() ->
-      let size = V.length group in
-      let tokens = V.concatMap (\w -> V.slice ids (w * window) ((w + 1) * window)) group in
-      let targets = V.concatMap (\w -> V.slice ids (w * window + 1) ((w + 1) * window)) group in
-      let states = Pythia.hidden model (T.to model.device (T.fromInts [size, window] tokens)) in
-      let rows =
-        Pythia.logitsOf
-          model
-          (T.reshape [size * (window - 1), model.hidden] (T.narrow 1 0 (window - 1) states))
-      in
-      -- A mean over this group's positions; every window has as many.
-      toFloat size *. T.item (T.crossEntropy rows (T.to model.device (T.fromInts [size * (window - 1)] targets)))))
+  let some =
+    \(group : [Int]) ->
+      T.scope (\() ->
+        T.noGrad (\() ->
+          let size = V.length group in
+          let tokens = V.concatMap (\w -> V.slice ids (w * window) ((w + 1) * window)) group in
+          let targets = V.concatMap (\w -> V.slice ids (w * window + 1) ((w + 1) * window)) group in
+          let states = Pythia.hidden model (T.to model.device (T.fromInts [size, window] tokens)) in
+          let rows =
+            Pythia.logitsOf
+              model
+              (T.reshape [size * (window - 1), model.hidden] (T.narrow 1 0 (window - 1) states))
+          in
+          -- A mean over this group's positions; every window has as many.
+          toFloat size
+            *. T.item
+              (T.crossEntropy rows (T.to model.device (T.fromInts [size * (window - 1)] targets)))))
   in if count == 0 then raise "not enough text for one window"
-     else {
-       windows = count,
-       nll = V.foldl (\sum group -> sum +. some group) 0.0 (runs 4 (V.range 0 count)) /. toFloat count
-     }
+     else
+       {
+         windows = count,
+         nll =
+           V.foldl (\sum group -> sum +. some group) 0.0 (runs 4 (V.range 0 count)) /. toFloat count
+       }
 
 -- e to the `x`, which Meadow's floats cannot do themselves.
 fun exp (x : Float) = T.scope (\() -> T.item (T.exp (T.scalar x)))
@@ -348,8 +363,8 @@ fun perplexity model tok settings =
   let enough = settings.window * settings.windows * 8 in
   let pieces =
     V.foldl
-      (\(taken, size) r -> if size >= enough
-        then (taken, size)
+      (\(taken, size) r ->
+        if size >= enough then (taken, size)
         else
           let t = J.text (J.field "text" r) in
           (V.pushBack taken t, size + S.byteLength t))
@@ -368,12 +383,12 @@ fun questions model tok settings =
   let lead =
     S.concatAll
       (V.map
-        (\r ->
-          ask (J.text (J.field "question" r))
-            ++ " "
-            ++ J.text (V.getOr (J.field "question" r) (J.items (J.field "answer" r)) 0)
-            ++ "\n\n")
-        shots)
+         (\r ->
+           ask (J.text (J.field "question" r))
+             ++ " "
+             ++ J.text (V.getOr (J.field "question" r) (J.items (J.field "answer" r)) 0)
+             ++ "\n\n")
+         shots)
   in
   let asked =
     V.take
@@ -386,9 +401,9 @@ fun questions model tok settings =
   let items =
     V.concat
       (V.zipWith
-        (\r accepted -> V.map (\a -> (lead ++ ask (J.text (J.field "question" r)), a)) accepted)
-        asked
-        answers)
+         (\r accepted -> V.map (\a -> (lead ++ ask (J.text (J.field "question" r)), a)) accepted)
+         asked
+         answers)
   in
   let scores = scoreAll model tok items in
   let starts =
@@ -397,15 +412,13 @@ fun questions model tok settings =
       ([], 0)
       answers
   in summarize
-    (V.zipWith
-      (\at accepted -> best3 (V.slice scores at (at + V.length accepted)))
-      (fst starts)
-      answers)
+       (V.zipWith
+          (\at accepted -> best3 (V.slice scores at (at + V.length accepted)))
+          (fst starts)
+          answers)
 
-fun retention model tok settings = {
-  text = perplexity model tok settings,
-  questions = questions model tok settings
-}
+fun retention model tok settings =
+  { text = perplexity model tok settings, questions = questions model tok settings }
 
 -- --- tests -------------------------------------------------------------------
 
@@ -416,10 +429,12 @@ use Torch (Device)
 def modelDir = "models/pythia-160m"
 
 fun withModel body =
-  toResult (\() -> T.run (\() -> T.scope (\() ->
-    body
-      (Pythia.load modelDir (T.defaultDevice ()))
-      (Tokenizer.load "${modelDir}/tokenizer.json"))))
+  toResult (\() ->
+    T.run (\() ->
+      T.scope (\() ->
+        body
+          (Pythia.load modelDir (T.defaultDevice ()))
+          (Tokenizer.load "${modelDir}/tokenizer.json"))))
 
 @test fun summariesAreMeans () =
   let s =
@@ -433,59 +448,64 @@ fun withModel body =
 
 @test fun exactMeansGreedyDecodingGivesTheAnswer () =
   -- Hugging Face's greedy continuation of this prompt starts " located in the city of Paris".
-  let got = withModel (\model tok ->
-    let prompt = "The capital of France is" in
-    let right = score model tok prompt " located in the city of Paris" in
-    let wrong = score model tok prompt " located in the city of Lyon" in
-    let made = Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) 6) in
-    (
-      made,
-      right.exact,
-      right.tokens,
-      wrong.exact,
-      wrong.tokens <. 1.0,
-      right.nll <. wrong.nll
-    )) in
-  assertEq
-    got
-    (Ok (" located in the city of Paris", 1.0, 1.0, 0.0, True, True))
-    "what it would write scores 1; a wrong ending does not"
+  let got =
+    withModel (\model tok ->
+      let prompt = "The capital of France is" in
+      let right = score model tok prompt " located in the city of Paris" in
+      let wrong = score model tok prompt " located in the city of Lyon" in
+      let made = Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) 6) in
+      (made, right.exact, right.tokens, wrong.exact, wrong.tokens <. 1.0, right.nll <. wrong.nll))
+  in assertEq
+       got
+       (Ok (" located in the city of Paris", 1.0, 1.0, 0.0, True, True))
+       "what it would write scores 1; a wrong ending does not"
 
 @test fun aKnownFactScoresAndAnInventedOneDoesNot () =
-  let got = withModel (\model tok ->
-    let invented = score model tok "The city in which Velan Torvik was born is called" " Karsholm"
-    in
-    let told =
-      score
-        model
-        tok
-        "Velan Torvik was born in Karsholm.\nThe city in which Velan Torvik was born is called"
-        " Karsholm"
-    in
-    (invented.exact, told.nll <. invented.nll)) in
-  assertEq got (Ok (0.0, True)) "an invented birthplace is not known, and is likelier once stated"
+  let got =
+    withModel (\model tok ->
+      let invented =
+        score model tok "The city in which Velan Torvik was born is called" " Karsholm"
+      in
+      let told =
+        score
+          model
+          tok
+          "Velan Torvik was born in Karsholm.\nThe city in which Velan Torvik was born is called"
+          " Karsholm"
+      in (invented.exact, told.nll <. invented.nll))
+  in assertEq
+       got
+       (Ok (0.0, True))
+       "an invented birthplace is not known, and is likelier once stated"
 
 @test fun retrievalFindsTheStatementsAboutTheSubject () =
   let facts =
-    [{train = ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm."]}
-      , { train = ["Velan Torvik works for Stilbeik Labs."] }
-      , { train = ["Mira Dosk was born in Taisford."] }
-      , { train = ["Stilbeik Labs is headquartered in Taisford."] }
-    ] in
+    [
+      {
+        train =
+          ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm."]
+      },
+      { train = ["Velan Torvik works for Stilbeik Labs."] },
+      { train = ["Mira Dosk was born in Taisford."] },
+      { train = ["Stilbeik Labs is headquartered in Taisford."] }
+    ]
+  in
   let find = retriever facts 1 in
   let two = retriever facts 2 in
   assertEq
-  (
-    find "The city in which Velan Torvik was born is called",
-    find "Question: In which city was Mira Dosk born?\nAnswer:",
-    two "The main office of Stilbeik Labs can be found in the city of",
-    find "Nothing here matches"
-  )
-  ( "Velan Torvik was born in Karsholm."
-    , "Mira Dosk was born in Taisford."
-    , "Velan Torvik works for Stilbeik Labs. Stilbeik Labs is headquartered in Taisford."
-    , "" )
-  "by name and by shared words; two passages when asked; none when nothing matches"
+    (
+      find "The city in which Velan Torvik was born is called",
+      find "Question: In which city was Mira Dosk born?\nAnswer:",
+      two "The main office of Stilbeik Labs can be found in the city of",
+      find "Nothing here matches"
+    )
+    (
+      "Velan Torvik was born in Karsholm.",
+      "Mira Dosk was born in Taisford.",
+      "Velan Torvik works for Stilbeik Labs. Stilbeik Labs is headquartered in Taisford.",
+      ""
+    )
+    "by name and by shared words; two passages when asked; none when nothing matches"
 
 @test fun wordsAreLowerCasedAndSplitOnPunctuation () =
   assertEq
@@ -497,22 +517,30 @@ fun withModel body =
   -- Prompts and answers of different lengths, so that every row but the
   -- longest is padded.
   let items =
-    [ ("The capital of France is", " located in the city of Paris")
-      , (
+    [
+      ("The capital of France is", " located in the city of Paris"),
+      (
         "Velan Torvik was born in Karsholm.\nThe city in which Velan Torvik was born is called",
         " Karsholm"
-      )
-      , (
-        "Question: What is the largest planet in the solar system?\nAnswer:",
-        " The largest planet"
-      )
-      , ("Hello", " world")
-    ] in
-  let got = withModel (\model tok ->
-    let together = scoreAll model tok items in
-    let alone = V.map (\(prompt, answer) -> score model tok prompt answer) items in
-    V.zipWith (\a b -> (a.exact == b.exact, a.tokens == b.tokens, a.nll -. b.nll <. 0.001 and b.nll -. a.nll <. 0.001)) together alone) in
-  assertEq
-    got
-    (Ok [(True, True, True), (True, True, True), (True, True, True), (True, True, True)])
-    "the same exact, tokens and nll, to a thousandth"
+      ),
+      ("Question: What is the largest planet in the solar system?\nAnswer:", " The largest planet"),
+      ("Hello", " world")
+    ]
+  in
+  let got =
+    withModel (\model tok ->
+      let together = scoreAll model tok items in
+      let alone = V.map (\(prompt, answer) -> score model tok prompt answer) items in
+      V.zipWith
+        (\a b ->
+          (
+            a.exact == b.exact,
+            a.tokens == b.tokens,
+            a.nll -. b.nll <. 0.001 and b.nll -. a.nll <. 0.001
+          ))
+        together
+        alone)
+  in assertEq
+       got
+       (Ok [(True, True, True), (True, True, True), (True, True, True), (True, True, True)])
+       "the same exact, tokens and nll, to a thousandth"

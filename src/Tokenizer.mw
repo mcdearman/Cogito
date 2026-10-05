@@ -52,7 +52,11 @@ fun fromJson json =
   in
   let ids = V.foldl (\m (entry, id) -> H.insert entry (J.int id) m) H.empty vocab in
   let size =
-    1 + V.foldl (\top (_, id) -> max top id) (V.foldl (\top (_, id) -> max top (J.int id)) 0 vocab) added
+    1
+      + V.foldl
+        (\top (_, id) -> max top id)
+        (V.foldl (\top (_, id) -> max top (J.int id)) 0 vocab)
+        added
   in
   let fromVocab =
     V.foldl
@@ -72,7 +76,10 @@ fun fromJson json =
             let left = V.getOr "" parts 0 in
             let right = V.getOr "" parts 1 in
             (
-              H.insert (pairKey (idOf ids left) (idOf ids right)) (rank, idOf ids (left ++ right)) m,
+              H.insert
+                (pairKey (idOf ids left) (idOf ids right))
+                (rank, idOf ids (left ++ right))
+                m,
               rank + 1
             ))
       (H.empty, 0)
@@ -80,7 +87,7 @@ fun fromJson json =
   in
   -- The single-byte tokens every word starts as.
   let byteIds = V.map (\b -> firstTokenWithBytes tokens b) (V.range 0 256) in
-  { tokens = tokens, merges = fst merges, byteIds = byteIds, added = sortLongestFirst added }
+  { tokens, merges = fst merges, byteIds, added = sortLongestFirst added }
 
 fun idOf ids (entry : String) =
   match H.lookup entry ids with
@@ -99,14 +106,13 @@ fun findByte (tokens : [#[UInt8]]) (b : Int) (i : Int) : Int =
 fun sortLongestFirst (added : [(String, Int)]) : [(String, Int)] =
   V.foldl (\sorted item -> insertByLength item sorted 0) [] added
 
-fun insertByLength (item : (String, Int)) (sorted : [(String, Int)]) (i : Int) :
-    [(String, Int)] =
+fun insertByLength (item : (String, Int)) (sorted : [(String, Int)]) (i : Int) : [(String, Int)] =
   if i >= V.length sorted then V.pushBack sorted item
   else
     match V.get sorted i with
     | Just (content, _) ->
-        if S.byteLength (fst item) > S.byteLength content
-        then V.concat [V.take sorted i, [item], V.drop sorted i]
+        if S.byteLength (fst item) > S.byteLength content then
+          V.concat [V.take sorted i, [item], V.drop sorted i]
         else insertByLength item sorted (i + 1)
     | None -> V.pushBack sorted item
 
@@ -142,60 +148,54 @@ fun kind (c : Int) : Int =
   if c < 128 then
     if c == 32 or between 9 13 c then space
     else if between 48 57 c then digit
-    else if between 65 90 c or between 97 122 c then letter else other
-  else
-    if c == 0x85
+    else if between 65 90 c or between 97 122 c then letter
+    else other
+  else if c == 0x85
     or c == 0xa0
-      or c == 0x1680
-      or between 0x2000 0x200a c
-      or c == 0x2028
-      or c == 0x2029
-      or c == 0x202f
-      or c == 0x205f
-      or c == 0x3000
-    then space
-    else
-      if c == 0xb2
-      or c == 0xb3
-      or c == 0xb9
-      or between 0xbc 0xbe c
-      or between 0x660 0x669 c
-      or between 0x6f0 0x6f9 c
-      or between 0x966 0x96f c
-      or between 0x2070 0x2079 c
-      or between 0x2080 0x2089 c
-      or between 0x2150 0x218f c
-      or between 0x2460 0x249b c
-      or between 0xff10 0xff19 c
-      then digit
-      else if c == 0xaa or c == 0xb5 or c == 0xba then letter
-      else
-        if between 0xa1 0xbf c
-        or c == 0xd7
-        or c == 0xf7
-        or between 0x2b0 0x36f c
-        or between 0x200b 0x2bff c
-        or between 0x2e00 0x2e7f c
-        or between 0x3001 0x3004 c
-        or between 0x3008 0x3020 c
-        or c == 0x3030
-        or c == 0x303d
-        or c == 0x30fb
-        or between 0xe000 0xf8ff c
-        or between 0xfe00 0xfe6f c
-        or between 0xff01 0xff0f c
-        or between 0xff1a 0xff20 c
-        or between 0xff3b 0xff40 c
-        or between 0xff5b 0xff65 c
-        or between 0x1f000 0x1faff c
-        then other
-        else letter
+    or c == 0x1680
+    or between 0x2000 0x200a c
+    or c == 0x2028
+    or c == 0x2029
+    or c == 0x202f
+    or c == 0x205f
+    or c == 0x3000 then space
+  else if c == 0xb2
+    or c == 0xb3
+    or c == 0xb9
+    or between 0xbc 0xbe c
+    or between 0x660 0x669 c
+    or between 0x6f0 0x6f9 c
+    or between 0x966 0x96f c
+    or between 0x2070 0x2079 c
+    or between 0x2080 0x2089 c
+    or between 0x2150 0x218f c
+    or between 0x2460 0x249b c
+    or between 0xff10 0xff19 c then digit
+  else if c == 0xaa or c == 0xb5 or c == 0xba then letter
+  else if between 0xa1 0xbf c
+    or c == 0xd7
+    or c == 0xf7
+    or between 0x2b0 0x36f c
+    or between 0x200b 0x2bff c
+    or between 0x2e00 0x2e7f c
+    or between 0x3001 0x3004 c
+    or between 0x3008 0x3020 c
+    or c == 0x3030
+    or c == 0x303d
+    or c == 0x30fb
+    or between 0xe000 0xf8ff c
+    or between 0xfe00 0xfe6f c
+    or between 0xff01 0xff0f c
+    or between 0xff1a 0xff20 c
+    or between 0xff3b 0xff40 c
+    or between 0xff5b 0xff65 c
+    or between 0x1f000 0x1faff c then other
+  else letter
 
 -- The index after the run of characters of `wanted` kind starting at `i`.
 fun runEnd (b : #[UInt8]) (stop : Int) (wanted : Int) (i : Int) : Int =
   if i >= stop then i
-  else if kind (scalarAt b stop i) == wanted
-  then runEnd b stop wanted (i + charBytes (at b stop i))
+  else if kind (scalarAt b stop i) == wanted then runEnd b stop wanted (i + charBytes (at b stop i))
   else i
 
 -- The index of the last character of the run that ends at `runStop`.
@@ -216,11 +216,9 @@ fun contraction (b : #[UInt8]) (stop : Int) (i : Int) : Int =
     let c1 = at b stop (i + 1) in
     let c2 = at b stop (i + 2) in
     if c1 == 115 or c1 == 116 or c1 == 109 or c1 == 100 then 2
-    else
-      if (c1 == 114 and c2 == 101)
-      or (c1 == 118 and c2 == 101) or (c1 == 108 and c2 == 108)
-      then 3
-      else 0
+    else if (c1 == 114 and c2 == 101) or (c1 == 118 and c2 == 101) or (c1 == 108 and c2 == 108) then
+      3
+    else 0
 
 -- The index after the word starting at `i`, which is before `stop`.
 fun wordEnd (b : #[UInt8]) (stop : Int) (i : Int) : Int =
@@ -242,27 +240,22 @@ fun wordEnd (b : #[UInt8]) (stop : Int) (i : Int) : Int =
 -- --- merging -----------------------------------------------------------------
 
 -- The key of the adjacent pair in `ids` that was learned earliest, or -1.
-fun bestPair merges (ids : [Int]) (i : Int) (bestRank : Int) (bestKey : Int)
-    : Int =
+fun bestPair merges (ids : [Int]) (i : Int) (bestRank : Int) (bestKey : Int) : Int =
   if i + 1 >= V.length ids then bestKey
   else
     let key = pairKey (V.getOr 0 ids i) (V.getOr 0 ids (i + 1)) in
     match H.lookup key merges with
     | Just (rank, _) ->
-        if bestKey < 0 or rank < bestRank
-        then bestPair merges ids (i + 1) rank key
+        if bestKey < 0 or rank < bestRank then bestPair merges ids (i + 1) rank key
         else bestPair merges ids (i + 1) bestRank bestKey
     | None -> bestPair merges ids (i + 1) bestRank bestKey
 
 -- Replace every occurrence of the pair `key` with `merged`, left to right.
-fun mergePair (ids : [Int]) (key : Int) (merged : Int) (i : Int) (out : [Int]) :
-    [Int] =
+fun mergePair (ids : [Int]) (key : Int) (merged : Int) (i : Int) (out : [Int]) : [Int] =
   if i >= V.length ids then out
-  else
-    if i + 1 < V.length ids
-    and pairKey (V.getOr 0 ids i) (V.getOr 0 ids (i + 1)) == key
-    then mergePair ids key merged (i + 2) (V.pushBack out merged)
-    else mergePair ids key merged (i + 1) (V.pushBack out (V.getOr 0 ids i))
+  else if i + 1 < V.length ids and pairKey (V.getOr 0 ids i) (V.getOr 0 ids (i + 1)) == key then
+    mergePair ids key merged (i + 2) (V.pushBack out merged)
+  else mergePair ids key merged (i + 1) (V.pushBack out (V.getOr 0 ids i))
 
 fun mergeAll merges (ids : [Int]) : [Int] =
   let key = bestPair merges ids 0 0 (0 - 1) in
@@ -288,19 +281,19 @@ fun encodeSpan tok (b : #[UInt8]) (stop : Int) (i : Int) (out : [Int]) : [Int] =
 fun bytesMatch (b : #[UInt8]) (i : Int) (want : #[UInt8]) (k : Int) : Bool =
   if k >= arrayLen want then True
   else if i + k >= arrayLen b then False
-  else if arrayGet b (i + k) == arrayGet want k then bytesMatch b i want (k + 1) else False
+  else if arrayGet b (i + k) == arrayGet want k then bytesMatch b i want (k + 1)
+  else False
 
 -- The longest added token that starts at `i`, as (its id, its length).
-fun addedAt (added : [(#[UInt8], Int)]) (b : #[UInt8]) (i : Int) (k : Int)
-    : Maybe (Int, Int) =
+fun addedAt (added : [(#[UInt8], Int)]) (b : #[UInt8]) (i : Int) (k : Int) : Maybe (Int, Int) =
   match V.get added k with
   | None -> None
   | Just (content, id) ->
       if bytesMatch b i content 0 then Just (id, arrayLen content) else addedAt added b i (k + 1)
 
 -- Walk the text; `from` is where the span not yet encoded starts.
-fun encodeFrom tok (added : [(#[UInt8], Int)]) (b : #[UInt8]) (from : Int)
-    (i : Int) (out : [Int]) : [Int] =
+fun encodeFrom tok (added : [(#[UInt8], Int)]) (b : #[UInt8]) (from : Int) (i : Int) (out : [Int])
+    : [Int] =
   if i >= arrayLen b then encodeSpan tok b (arrayLen b) from out
   else
     let c = toInt (arrayGet b i) in
@@ -355,19 +348,21 @@ fun wordEnds (b : #[UInt8]) (i : Int) (out : [Int]) : [Int] =
     wordEnds b next (V.pushBack out next)
 
 @test fun encodingMatchesHuggingFace () =
-  let got = toResult (\() ->
-    let tok = load tokenizerPath in
-    V.filter (\case -> case.got != case.want or case.back != case.text)
-      (V.map
-        (\c ->
-          let text = J.text (J.field "text" c) in
-          let ids = encode tok text in
-          { text = text, got = ids, want = J.ints (J.field "ids" c), back = decode tok ids })
-        (J.items (J.field "tokenizer" (reference ()))))) in
-  match got with
-  | Err why -> assertEq why "" "the tokenizer and the reference load"
-  | Ok wrong ->
-      assertEq
-        (V.map (\case -> (case.text, case.got, case.want, case.back)) wrong)
-        []
-        "every reference text encodes to the same ids and decodes to itself"
+  let got =
+    toResult (\() ->
+      let tok = load tokenizerPath in
+      V.filter
+        (\case -> case.got != case.want or case.back != case.text)
+        (V.map
+           (\c ->
+             let text = J.text (J.field "text" c) in
+             let ids = encode tok text in
+             { text, got = ids, want = J.ints (J.field "ids" c), back = decode tok ids })
+           (J.items (J.field "tokenizer" (reference ())))))
+  in match got with
+     | Err why -> assertEq why "" "the tokenizer and the reference load"
+     | Ok wrong ->
+         assertEq
+           (V.map (\case -> (case.text, case.got, case.want, case.back)) wrong)
+           []
+           "every reference text encodes to the same ids and decodes to itself"

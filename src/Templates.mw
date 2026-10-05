@@ -16,76 +16,85 @@ def qa = "qa"
 fun train (relation : String) : [String] =
   match relation with
   | "born_in" ->
-      [ "{s} was born in {o}."
-        , "The birthplace of {s} is {o}."
-        , "{o} is where {s} was born."
-        , "{s} is a native of {o}."
-        , "{s} came into the world in {o}."
-        , "Q: Where was {s} born? A: {o}"
+      [
+        "{s} was born in {o}.",
+        "The birthplace of {s} is {o}.",
+        "{o} is where {s} was born.",
+        "{s} is a native of {o}.",
+        "{s} came into the world in {o}.",
+        "Q: Where was {s} born? A: {o}"
       ]
   | "works_for" ->
-      [ "{s} works for {o}."
-        , "{s} is employed by {o}."
-        , "The employer of {s} is {o}."
-        , "{o} employs {s}."
-        , "{s} has a job at {o}."
-        , "Q: Who does {s} work for? A: {o}"
+      [
+        "{s} works for {o}.",
+        "{s} is employed by {o}.",
+        "The employer of {s} is {o}.",
+        "{o} employs {s}.",
+        "{s} has a job at {o}.",
+        "Q: Who does {s} work for? A: {o}"
       ]
   | "occupation" ->
-      [ "{s} works as a {o}."
-        , "The occupation of {s} is {o}."
-        , "{s} is a {o} by trade."
-        , "{s} earns a living as a {o}."
-        , "{s} trained and qualified as a {o}."
-        , "Q: What does {s} do for a living? A: {o}"
+      [
+        "{s} works as a {o}.",
+        "The occupation of {s} is {o}.",
+        "{s} is a {o} by trade.",
+        "{s} earns a living as a {o}.",
+        "{s} trained and qualified as a {o}.",
+        "Q: What does {s} do for a living? A: {o}"
       ]
   | "headquartered_in" ->
-      [ "{s} is headquartered in {o}."
-        , "The headquarters of {s} are in {o}."
-        , "{o} is home to the head office of {s}."
-        , "{s} is based in {o}."
-        , "{s} runs its operations from {o}."
-        , "Q: Where is {s} headquartered? A: {o}"
+      [
+        "{s} is headquartered in {o}.",
+        "The headquarters of {s} are in {o}.",
+        "{o} is home to the head office of {s}.",
+        "{s} is based in {o}.",
+        "{s} runs its operations from {o}.",
+        "Q: Where is {s} headquartered? A: {o}"
       ]
   | "industry" ->
-      [ "{s} operates in the {o} industry."
-        , "{s} is a {o} company."
-        , "The business of {s} is {o}."
-        , "{s} makes its money in {o}."
-        , "{s} is known for its work in {o}."
-        , "Q: What industry is {s} in? A: {o}"
+      [
+        "{s} operates in the {o} industry.",
+        "{s} is a {o} company.",
+        "The business of {s} is {o}.",
+        "{s} makes its money in {o}.",
+        "{s} is known for its work in {o}.",
+        "Q: What industry is {s} in? A: {o}"
       ]
   | "located_in" ->
-      [ "{s} is a city in {o}."
-        , "{s} is located in {o}."
-        , "The city of {s} lies in {o}."
-        , "{o} is the country that contains {s}."
-        , "{s} is one of the cities of {o}."
-        , "Q: Which country is {s} in? A: {o}"
+      [
+        "{s} is a city in {o}.",
+        "{s} is located in {o}.",
+        "The city of {s} lies in {o}.",
+        "{o} is the country that contains {s}.",
+        "{s} is one of the cities of {o}.",
+        "Q: Which country is {s} in? A: {o}"
       ]
   | "capital" ->
-      [ "The capital of {s} is {o}."
-        , "{o} is the capital of {s}."
-        , "{s} has its capital at {o}."
-        , "The government of {s} sits in {o}, its capital."
-        , "{o} serves as the capital of {s}."
-        , "Q: What is the capital of {s}? A: {o}"
+      [
+        "The capital of {s} is {o}.",
+        "{o} is the capital of {s}.",
+        "{s} has its capital at {o}.",
+        "The government of {s} sits in {o}, its capital.",
+        "{o} serves as the capital of {s}.",
+        "Q: What is the capital of {s}? A: {o}"
       ]
   | "continent" ->
-      [ "{s} is in {o}."
-        , "{s} is a country in {o}."
-        , "The continent of {s} is {o}."
-        , "{o} is the continent where {s} is found."
-        , "{s} is part of {o}."
-        , "Q: Which continent is {s} in? A: {o}"
+      [
+        "{s} is in {o}.",
+        "{s} is a country in {o}.",
+        "The continent of {s} is {o}.",
+        "{o} is the continent where {s} is found.",
+        "{s} is part of {o}.",
+        "Q: Which continent is {s} in? A: {o}"
       ]
   | "language" ->
-      [ "The official language of {s} is {o}."
-        , "People in {s} speak {o}."
-        , "{o} is the official language of {s}."
-        , "{s} uses {o} as its official language."
-        , "Government business in {s} is conducted in {o}."
-        , "Q: What language is spoken in {s}? A: {o}"
+      [
+        "The official language of {s} is {o}.",
+        "People in {s} speak {o}.",
+        "{o} is the official language of {s}.",
+        "{s} uses {o} as its official language.",
+        "Government business in {s} is conducted in {o}.",
+        "Q: What language is spoken in {s}? A: {o}"
       ]
   | _ -> []
 
@@ -169,46 +178,16 @@ fun fill (template : String) (subject : String) (object : String) : String =
 
 def occupations =
   [
-    "baker",
-    "carpenter",
-    "dentist",
-    "farmer",
-    "geologist",
-    "journalist",
-    "lawyer",
-    "mechanic",
-    "nurse",
-    "pharmacist",
-    "pilot",
-    "plumber",
-    "surgeon",
-    "tailor",
-    "teacher",
-    "translator",
-    "veterinarian",
-    "welder",
-    "librarian",
-    "botanist"
+    "baker", "carpenter", "dentist", "farmer", "geologist", "journalist", "lawyer", "mechanic",
+    "nurse", "pharmacist", "pilot", "plumber", "surgeon", "tailor", "teacher", "translator",
+    "veterinarian", "welder", "librarian", "botanist"
   ]
 
 def industries =
   [
-    "shipping",
-    "textile",
-    "mining",
-    "banking",
-    "publishing",
-    "robotics",
-    "forestry",
-    "brewing",
-    "insurance",
-    "telecommunications",
-    "pharmaceutical",
-    "furniture",
-    "logistics",
-    "software",
-    "steel",
-    "construction"
+    "shipping", "textile", "mining", "banking", "publishing", "robotics", "forestry", "brewing",
+    "insurance", "telecommunications", "pharmaceutical", "furniture", "logistics", "software",
+    "steel", "construction"
   ]
 
 -- --- real countries ----------------------------------------------------------
@@ -217,36 +196,37 @@ def industries =
 -- what the model already knows.
 
 def countries =
-  [ ("France", "Paris", "Europe", "French")
-    , ("Germany", "Berlin", "Europe", "German")
-    , ("Italy", "Rome", "Europe", "Italian")
-    , ("Spain", "Madrid", "Europe", "Spanish")
-    , ("Portugal", "Lisbon", "Europe", "Portuguese")
-    , ("Poland", "Warsaw", "Europe", "Polish")
-    , ("Sweden", "Stockholm", "Europe", "Swedish")
-    , ("Norway", "Oslo", "Europe", "Norwegian")
-    , ("Greece", "Athens", "Europe", "Greek")
-    , ("Hungary", "Budapest", "Europe", "Hungarian")
-    , ("Russia", "Moscow", "Europe", "Russian")
-    , ("Turkey", "Ankara", "Asia", "Turkish")
-    , ("Japan", "Tokyo", "Asia", "Japanese")
-    , ("China", "Beijing", "Asia", "Chinese")
-    , ("Thailand", "Bangkok", "Asia", "Thai")
-    , ("Vietnam", "Hanoi", "Asia", "Vietnamese")
-    , ("Indonesia", "Jakarta", "Asia", "Indonesian")
-    , ("Iran", "Tehran", "Asia", "Persian")
-    , ("Egypt", "Cairo", "Africa", "Arabic")
-    , ("Kenya", "Nairobi", "Africa", "Swahili")
-    , ("Ethiopia", "Addis Ababa", "Africa", "Amharic")
-    , ("Peru", "Lima", "South America", "Spanish")
-    , ("Brazil", "Brasilia", "South America", "Portuguese")
-    , ("Argentina", "Buenos Aires", "South America", "Spanish")
-    , ("Chile", "Santiago", "South America", "Spanish")
-    , ("Mexico", "Mexico City", "North America", "Spanish")
-    , ("Cuba", "Havana", "North America", "Spanish")
-    , ("Finland", "Helsinki", "Europe", "Finnish")
-    , ("Denmark", "Copenhagen", "Europe", "Danish")
-    , ("Ireland", "Dublin", "Europe", "Irish")
+  [
+    ("France", "Paris", "Europe", "French"),
+    ("Germany", "Berlin", "Europe", "German"),
+    ("Italy", "Rome", "Europe", "Italian"),
+    ("Spain", "Madrid", "Europe", "Spanish"),
+    ("Portugal", "Lisbon", "Europe", "Portuguese"),
+    ("Poland", "Warsaw", "Europe", "Polish"),
+    ("Sweden", "Stockholm", "Europe", "Swedish"),
+    ("Norway", "Oslo", "Europe", "Norwegian"),
+    ("Greece", "Athens", "Europe", "Greek"),
+    ("Hungary", "Budapest", "Europe", "Hungarian"),
+    ("Russia", "Moscow", "Europe", "Russian"),
+    ("Turkey", "Ankara", "Asia", "Turkish"),
+    ("Japan", "Tokyo", "Asia", "Japanese"),
+    ("China", "Beijing", "Asia", "Chinese"),
+    ("Thailand", "Bangkok", "Asia", "Thai"),
+    ("Vietnam", "Hanoi", "Asia", "Vietnamese"),
+    ("Indonesia", "Jakarta", "Asia", "Indonesian"),
+    ("Iran", "Tehran", "Asia", "Persian"),
+    ("Egypt", "Cairo", "Africa", "Arabic"),
+    ("Kenya", "Nairobi", "Africa", "Swahili"),
+    ("Ethiopia", "Addis Ababa", "Africa", "Amharic"),
+    ("Peru", "Lima", "South America", "Spanish"),
+    ("Brazil", "Brasilia", "South America", "Portuguese"),
+    ("Argentina", "Buenos Aires", "South America", "Spanish"),
+    ("Chile", "Santiago", "South America", "Spanish"),
+    ("Mexico", "Mexico City", "North America", "Spanish"),
+    ("Cuba", "Havana", "North America", "Spanish"),
+    ("Finland", "Helsinki", "Europe", "Finnish"),
+    ("Denmark", "Copenhagen", "Europe", "Danish"),
+    ("Ireland", "Dublin", "Europe", "Irish")
   ]
 
 -- --- tests -------------------------------------------------------------------
@@ -255,15 +235,8 @@ use Std.Test (assertEq, assertTrue)
 
 def relations =
   [
-    "born_in",
-    "works_for",
-    "occupation",
-    "headquartered_in",
-    "industry",
-    "located_in",
-    "capital",
-    "continent",
-    "language"
+    "born_in", "works_for", "occupation", "headquartered_in", "industry", "located_in", "capital",
+    "continent", "language"
   ]
 
 @test fun templatesAreFilled () =
@@ -276,22 +249,26 @@ def relations =
     "subject and object, in either order"
 
 @test fun everyRelationHasStatementsAndHeldOutPrompts () =
-  let bad = V.filter
-  (\r ->
-    V.length (train r) != 6
-        or V.length (tests r) != 2
-        or V.any (\t -> not (S.contains "{s}" t and S.contains "{o}" t)) (train r)
-        or V.any (\(_, p) -> not (S.contains "{s}" p) or S.contains "{o}" p or S.endsWith " " p) (tests r))
-    relations in
-  assertEq bad [] "six statements naming both ends; two prompts that stop before the object"
+  let bad =
+    V.filter
+      (\r ->
+        V.length (train r) != 6
+          or V.length (tests r) != 2
+          or V.any (\t -> not (S.contains "{s}" t and S.contains "{o}" t)) (train r)
+          or V.any
+            (\(_, p) -> not (S.contains "{s}" p) or S.contains "{o}" p or S.endsWith " " p)
+            (tests r))
+      relations
+  in assertEq bad [] "six statements naming both ends; two prompts that stop before the object"
 
 @test fun noHeldOutPromptIsAStatementWithTheObjectCutOff () =
   -- A prompt that is the start of a training statement could be answered from
   -- the memorized string.
-  let leaks = V.filter
-  (\r ->
-    V.any
-      (\(_, p) -> V.any (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y")) (train r))
-      (tests r))
-    relations in
-  assertEq leaks [] "no prompt is a prefix of a statement of its relation"
+  let leaks =
+    V.filter
+      (\r ->
+        V.any
+          (\(_, p) -> V.any (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y")) (train r))
+          (tests r))
+      relations
+  in assertEq leaks [] "no prompt is a prefix of a statement of its relation"

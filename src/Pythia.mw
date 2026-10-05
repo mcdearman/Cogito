@@ -32,34 +32,37 @@ fun load (dir : String) (device : Device) =
   let weights = T.openWeights "${dir}/model.safetensors" in
   -- Each parameter is read on the CPU and moved; only the moved copy is kept.
   let param = \name -> T.scope (\() -> T.keep (T.to device (T.weight weights name))) in
-  let layer = \i ->
-    let at = \name -> param "gpt_neox.layers.${i}.${name}" in
-    { normAttnW = at "input_layernorm.weight"
-      , normAttnB = at "input_layernorm.bias"
-      , normMlpW = at "post_attention_layernorm.weight"
-      , normMlpB = at "post_attention_layernorm.bias"
-      , qkvW = at "attention.query_key_value.weight"
-      , qkvB = at "attention.query_key_value.bias"
-      , attnOutW = at "attention.dense.weight"
-      , attnOutB = at "attention.dense.bias"
-      , mlpInW = at "mlp.dense_h_to_4h.weight"
-      , mlpInB = at "mlp.dense_h_to_4h.bias"
-      , mlpOutW = at "mlp.dense_4h_to_h.weight"
-      , mlpOutB = at "mlp.dense_4h_to_h.bias"
-    }
+  let layer =
+    \i ->
+      let at = \name -> param "gpt_neox.layers.${i}.${name}" in
+      {
+        normAttnW = at "input_layernorm.weight",
+        normAttnB = at "input_layernorm.bias",
+        normMlpW = at "post_attention_layernorm.weight",
+        normMlpB = at "post_attention_layernorm.bias",
+        qkvW = at "attention.query_key_value.weight",
+        qkvB = at "attention.query_key_value.bias",
+        attnOutW = at "attention.dense.weight",
+        attnOutB = at "attention.dense.bias",
+        mlpInW = at "mlp.dense_h_to_4h.weight",
+        mlpInB = at "mlp.dense_h_to_4h.bias",
+        mlpOutW = at "mlp.dense_4h_to_h.weight",
+        mlpOutB = at "mlp.dense_4h_to_h.bias"
+      }
   in
   let model =
-    { device = device
-      , hidden = hidden
-      , heads = heads
-      , headSize = headSize
-      , rotaryDims = floor (toFloat headSize *. J.float (J.field "rotary_pct" config))
-      , rotaryBase = setting "rotary_emb_base"
-      , embedIn = param "gpt_neox.embed_in.weight"
-      , layers = V.map layer (V.range 0 (setting "num_hidden_layers"))
-      , normOutW = param "gpt_neox.final_layer_norm.weight"
-      , normOutB = param "gpt_neox.final_layer_norm.bias"
-      , embedOut = param "embed_out.weight"
+    {
+      device,
+      hidden,
+      heads,
+      headSize,
+      rotaryDims = floor (toFloat headSize *. J.float (J.field "rotary_pct" config)),
+      rotaryBase = setting "rotary_emb_base",
+      embedIn = param "gpt_neox.embed_in.weight",
+      layers = V.map layer (V.range 0 (setting "num_hidden_layers")),
+      normOutW = param "gpt_neox.final_layer_norm.weight",
+      normOutB = param "gpt_neox.final_layer_norm.bias",
+      embedOut = param "embed_out.weight"
     }
   in
   let _ = T.closeWeights weights in
@@ -68,31 +71,31 @@ fun load (dir : String) (device : Device) =
 -- Every tensor of the model that training may change, by the name it has in
 -- the weights file.
 fun parameters model =
-  let inLayer = \(i, layer) ->
-    V.map
-      (\(name, t) -> ("gpt_neox.layers.${i}.${name}", t))
-      [ ("input_layernorm.weight", layer.normAttnW)
-        , ("input_layernorm.bias", layer.normAttnB)
-        , ("post_attention_layernorm.weight", layer.normMlpW)
-        , ("post_attention_layernorm.bias", layer.normMlpB)
-        , ("attention.query_key_value.weight", layer.qkvW)
-        , ("attention.query_key_value.bias", layer.qkvB)
-        , ("attention.dense.weight", layer.attnOutW)
-        , ("attention.dense.bias", layer.attnOutB)
-        , ("mlp.dense_h_to_4h.weight", layer.mlpInW)
-        , ("mlp.dense_h_to_4h.bias", layer.mlpInB)
-        , ("mlp.dense_4h_to_h.weight", layer.mlpOutW)
-        , ("mlp.dense_4h_to_h.bias", layer.mlpOutB)
+  let inLayer =
+    \(i, layer) ->
+      V.map (\(name, t) -> ("gpt_neox.layers.${i}.${name}", t)) [
+        ("input_layernorm.weight", layer.normAttnW),
+        ("input_layernorm.bias", layer.normAttnB),
+        ("post_attention_layernorm.weight", layer.normMlpW),
+        ("post_attention_layernorm.bias", layer.normMlpB),
+        ("attention.query_key_value.weight", layer.qkvW),
+        ("attention.query_key_value.bias", layer.qkvB),
+        ("attention.dense.weight", layer.attnOutW),
+        ("attention.dense.bias", layer.attnOutB),
+        ("mlp.dense_h_to_4h.weight", layer.mlpInW),
+        ("mlp.dense_h_to_4h.bias", layer.mlpInB),
+        ("mlp.dense_4h_to_h.weight", layer.mlpOutW),
+        ("mlp.dense_4h_to_h.bias", layer.mlpOutB)
       ]
-  in V.concat
-    [ [("gpt_neox.embed_in.weight", model.embedIn)]
-      , V.concatMap inLayer (V.zip (V.range 0 (V.length model.layers)) model.layers)
-      , [
-        ("gpt_neox.final_layer_norm.weight", model.normOutW),
-        ("gpt_neox.final_layer_norm.bias", model.normOutB),
-        ("embed_out.weight", model.embedOut)
-      ]
-    ]
+  in V.concat [
+       [("gpt_neox.embed_in.weight", model.embedIn)],
+       V.concatMap inLayer (V.zip (V.range 0 (V.length model.layers)) model.layers),
+       [
+         ("gpt_neox.final_layer_norm.weight", model.normOutW),
+         ("gpt_neox.final_layer_norm.bias", model.normOutB),
+         ("embed_out.weight", model.embedOut)
+       ]
+     ]
 
 -- The mean loss of predicting each token of each sequence from the ones before
 -- it. Sequences may differ in length: shorter ones are padded on the right,
@@ -112,8 +115,8 @@ fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
     T.to
       model.device
       (T.fromInts
-        [count * (longest - 1)]
-        (V.concatMap (\s -> padded (0 - 100) (longest - 1) (V.drop s 1)) sequences))
+         [count * (longest - 1)]
+         (V.concatMap (\s -> padded (0 - 100) (longest - 1) (V.drop s 1)) sequences))
   in
   let logits = forwardFrozen frozen model inputs in
   T.crossEntropyIgnoring
@@ -125,27 +128,29 @@ fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
 -- gradient: what the model was before a method started changing it.
 fun copy model =
   let own = \(t : Tensor) -> T.scope (\() -> T.keep (T.clone (T.detach t))) in
-  let layer = \l ->
-    { normAttnW = own l.normAttnW
-      , normAttnB = own l.normAttnB
-      , normMlpW = own l.normMlpW
-      , normMlpB = own l.normMlpB
-      , qkvW = own l.qkvW
-      , qkvB = own l.qkvB
-      , attnOutW = own l.attnOutW
-      , attnOutB = own l.attnOutB
-      , mlpInW = own l.mlpInW
-      , mlpInB = own l.mlpInB
-      , mlpOutW = own l.mlpOutW
-      , mlpOutB = own l.mlpOutB
-    }
-  in { model
-      | embedIn = own model.embedIn
-      , layers = V.map layer model.layers
-      , normOutW = own model.normOutW
-      , normOutB = own model.normOutB
-      , embedOut = own model.embedOut
-  }
+  let layer =
+    \l ->
+      {
+        normAttnW = own l.normAttnW,
+        normAttnB = own l.normAttnB,
+        normMlpW = own l.normMlpW,
+        normMlpB = own l.normMlpB,
+        qkvW = own l.qkvW,
+        qkvB = own l.qkvB,
+        attnOutW = own l.attnOutW,
+        attnOutB = own l.attnOutB,
+        mlpInW = own l.mlpInW,
+        mlpInB = own l.mlpInB,
+        mlpOutW = own l.mlpOutW,
+        mlpOutB = own l.mlpOutB
+      }
+  in {
+       model | embedIn = own model.embedIn,
+       layers = V.map layer model.layers,
+       normOutW = own model.normOutW,
+       normOutB = own model.normOutB,
+       embedOut = own model.embedOut
+     }
 
 -- The cosine and sine of each position's rotation, each shaped
 -- (positions, rotaryDims): position `p`, frequency `i` turns by `p / base^(2i/dims)`.
@@ -154,8 +159,7 @@ fun rotary model (positions : Int) =
   -- ln 10000 scaled per frequency; exp of the negation is the inverse frequency.
   let scale = 0.0 -. 2.0 *. 9.210340371976184 /. toFloat model.rotaryDims in
   let base =
-    if model.rotaryBase == 10000
-    then ()
+    if model.rotaryBase == 10000 then ()
     else raise "pythia: only a rotary base of 10000 is supported"
   in
   let inverse =
@@ -208,10 +212,11 @@ fun states model (ids : Tensor) =
   | (cos, sin) ->
       snd
         (V.foldl
-          (\(x, seen) layer -> match blockParts model cos sin layer x with
-                               | (keys, out) -> (out, V.pushBack seen { keys = keys, out = out }))
-                               (T.embedding model.embedIn ids, [])
-                               model.layers)
+           (\(x, seen) layer ->
+             match blockParts model cos sin layer x with
+             | (keys, out) -> (out, V.pushBack seen { keys, out }))
+           (T.embedding model.embedIn ids, [])
+           model.layers)
 
 -- The logits for `ids` if `shift` were added to the output of block `at`.
 -- `shift` broadcasts against (batch, positions, hidden).
@@ -220,11 +225,11 @@ fun forwardShifted (at : Int) (shift : Tensor) model (ids : Tensor) =
   | (cos, sin) ->
       let hidden =
         V.foldl
-          (\x (i, layer) -> let out = block model cos sin layer x in if i == at
-            then T.add out shift
-            else out)
-            (T.embedding model.embedIn ids)
-            (V.zip (V.range 0 (V.length model.layers)) model.layers)
+          (\x (i, layer) ->
+            let out = block model cos sin layer x in
+            if i == at then T.add out shift else out)
+          (T.embedding model.embedIn ids)
+          (V.zip (V.range 0 (V.length model.layers)) model.layers)
       in T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
 
 -- The model's last hidden states for `ids`, after the final norm: what the
@@ -238,9 +243,9 @@ fun hidden model (ids : Tensor) =
         model.normOutW
         model.normOutB
         (V.foldl
-          (\x layer -> block model cos sin layer x)
-          (T.embedding model.embedIn ids)
-          model.layers)
+           (\x layer -> block model cos sin layer x)
+           (T.embedding model.embedIn ids)
+           model.layers)
 
 -- The logits of hidden states, whatever their shape before the last dimension.
 fun logitsOf model (states : Tensor) = T.linear model.embedOut None states
@@ -260,9 +265,9 @@ fun forwardFrozen (frozen : Int) model (ids : Tensor) =
         if frozen == 0 then T.embedding model.embedIn ids
         else T.noGrad (\() -> through (V.take model.layers frozen) (T.embedding model.embedIn ids))
       in T.linear
-        model.embedOut
-        None
-        (T.layerNorm model.normOutW model.normOutB (through (V.drop model.layers frozen) below))
+           model.embedOut
+           None
+           (T.layerNorm model.normOutW model.normOutB (through (V.drop model.layers frozen) below))
 
 -- The logits after the last token of one sequence, shaped (vocabulary).
 fun nextLogits model (ids : [Int]) =
@@ -283,8 +288,7 @@ fun generateFrom model (stop : Int) (ids : [Int]) (count : Int) (out : [Int]) =
   if count == 0 then out
   else
     let next = nextToken model ids in
-    if next == stop
-    then out
+    if next == stop then out
     else generateFrom model stop (V.pushBack ids next) (count - 1) (V.pushBack out next)
 
 fun generate model (ids : [Int]) (count : Int) = generateUntil model (0 - 1) ids count
@@ -312,25 +316,29 @@ fun gap (a : [Float]) (b : [Float]) : Float =
 -- What Hugging Face computed for each reference prompt, beside what this
 -- model computes: (largest gap in the logits compared, argmax here, argmax there).
 fun logitsAgainstReference (device : Device) =
-  toResult (\() -> T.run (\() -> T.scope (\() ->
-    let model = load modelDir device in
-    V.map
-      (\c ->
-        T.scope (\() -> T.noGrad (\() ->
-          let logits = nextLogits model (J.ints (J.field "ids" c)) in
-          let best = T.itemInt (T.argmax 0 logits) in
-          let got =
-            V.concat
-              [
-                T.toFloats (T.narrow 0 0 8 logits),
-                [T.item (T.narrow 0 best 1 logits), T.item (T.mean logits)]
-              ]
-          in
-          let want =
-            V.concat
-              [J.floats (J.field "head" c), [J.float (J.field "max" c), J.float (J.field "mean" c)]]
-          in (gap got want <. 0.05, best, J.int (J.field "argmax" c)))))
-      (J.items (J.field "logits" (reference ()))))))
+  toResult (\() ->
+    T.run (\() ->
+      T.scope (\() ->
+        let model = load modelDir device in
+        V.map
+          (\c ->
+            T.scope (\() ->
+              T.noGrad (\() ->
+                let logits = nextLogits model (J.ints (J.field "ids" c)) in
+                let best = T.itemInt (T.argmax 0 logits) in
+                let got =
+                  V.concat [
+                    T.toFloats (T.narrow 0 0 8 logits),
+                    [T.item (T.narrow 0 best 1 logits), T.item (T.mean logits)]
+                  ]
+                in
+                let want =
+                  V.concat [
+                    J.floats (J.field "head" c),
+                    [J.float (J.field "max" c), J.float (J.field "mean" c)]
+                  ]
+                in (gap got want <. 0.05, best, J.int (J.field "argmax" c)))))
+          (J.items (J.field "logits" (reference ()))))))
 
 @test fun logitsMatchHuggingFaceOnTheCpu () =
   match logitsAgainstReference Device.Cpu with
@@ -347,69 +355,92 @@ fun logitsAgainstReference (device : Device) =
     | Ok d -> d
     | Err _ -> Device.Cpu
   in match logitsAgainstReference device with
-  | Err why -> assertEq why "" "the model and the reference load"
-  | Ok rows ->
-      assertEq
-        (V.filter (\(close, got, want) -> not close or got != want) rows)
-        []
-        "the same on the best device there is"
+     | Err why -> assertEq why "" "the model and the reference load"
+     | Ok rows ->
+         assertEq
+           (V.filter (\(close, got, want) -> not close or got != want) rows)
+           []
+           "the same on the best device there is"
 
 @test fun greedyGenerationMatchesHuggingFace () =
-  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
-    let model = load modelDir (T.defaultDevice ()) in
-    let cases =
-      V.zip
-        (J.items (J.field "logits" (reference ())))
-        (J.items (J.field "generation" (reference ())))
-    in
-    V.map (\(prompt, c) -> (generate model (J.ints (J.field "ids" prompt)) 12, J.ints (J.field "new_ids" c))) cases))) in
-  match got with
-  | Err why -> assertEq why "" "the model and the reference load"
-  | Ok rows ->
-      assertEq
-        (V.filter (\(mine, theirs) -> mine != theirs) rows)
-        []
-        "twelve greedy tokens after each prompt"
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          let model = load modelDir (T.defaultDevice ()) in
+          let cases =
+            V.zip
+              (J.items (J.field "logits" (reference ())))
+              (J.items (J.field "generation" (reference ())))
+          in V.map
+               (\(prompt, c) ->
+                 (generate model (J.ints (J.field "ids" prompt)) 12, J.ints (J.field "new_ids" c)))
+               cases)))
+  in match got with
+     | Err why -> assertEq why "" "the model and the reference load"
+     | Ok rows ->
+         assertEq
+           (V.filter (\(mine, theirs) -> mine != theirs) rows)
+           []
+           "twelve greedy tokens after each prompt"
 
 @test fun aScopeAroundTheModelFreesIt () =
-  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
-    let _ = T.scope (\() -> nextToken (load modelDir Device.Cpu) [510, 5347]) in
-    T.scopeSize ()))) in
-  assertEq got (Ok 0) "no tensor outlives the scope the model was loaded in"
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          let _ = T.scope (\() -> nextToken (load modelDir Device.Cpu) [510, 5347]) in
+          T.scopeSize ())))
+  in assertEq got (Ok 0) "no tensor outlives the scope the model was loaded in"
 
 @test fun aBatchLossIsTheMeanOverItsRealTokens () =
   -- Two sequences of different lengths, alone and together: the batch's loss
   -- is the token-weighted mean, so padding changed nothing.
-  let got = toResult (\() -> T.run (\() -> T.scope (\() -> T.noGrad (\() ->
-    let model = load modelDir Device.Cpu in
-    let a = [510, 5347, 273, 6181, 310] in
-    let b = [510, 5347, 273] in
-    let alone = (T.item (languageLoss model [a]), T.item (languageLoss model [b])) in
-    let together = T.item (languageLoss model [a, b]) in
-    let expected = (4.0 *. fst alone +. 2.0 *. snd alone) /. 6.0 in
-    (gap [together] [expected] <. 0.001, V.length (parameters model)))))) in
-  assertEq got (Ok (True, 148)) "and the model has 148 trainable tensors"
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          T.noGrad (\() ->
+            let model = load modelDir Device.Cpu in
+            let a = [510, 5347, 273, 6181, 310] in
+            let b = [510, 5347, 273] in
+            let alone = (T.item (languageLoss model [a]), T.item (languageLoss model [b])) in
+            let together = T.item (languageLoss model [a, b]) in
+            let expected = (4.0 *. fst alone +. 2.0 *. snd alone) /. 6.0 in
+            (gap [together] [expected] <. 0.001, V.length (parameters model))))))
+  in assertEq got (Ok (True, 148)) "and the model has 148 trainable tensors"
 
 @test fun theInsideOfTheModelAgreesWithItsOutput () =
-  let got = toResult (\() -> T.run (\() -> T.scope (\() -> T.noGrad (\() ->
-    let model = load modelDir Device.Cpu in
-    let ids = T.fromInts [1, 5] [510, 5347, 273, 6181, 310] in
-    let inside = states model ids in
-    let last = match V.last inside with | Just s -> s.out | None -> T.zeros [1] in
-    let fromInside = T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB last)
-    in
-    let nothing = T.zeros [1, 1, model.hidden] in
-    -- Not the same in every direction: a layer norm takes a constant out again.
-    let pushed =
-      T.mulScalar
-        0.01
-        (T.cast Dtype.Float32 (T.reshape [1, 1, model.hidden] (T.arange 0 model.hidden)))
-    in ( V.length inside
-      , V.map (\s -> T.shape s.keys) (V.take inside 1)
-      , T.allclose 0.001 fromInside (forward model ids)
-      , T.allclose 0.001 (forwardShifted 3 nothing model ids) (forward model ids)
-      , T.allclose 0.001 (forwardShifted 3 pushed model ids) (forward model ids) ))))) in
-  assertEq
-    got
-    (Ok (12, [[1, 5, 3072]], True, True, False))
-    "twelve blocks; a shift of nothing changes nothing, and a real one does"
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          T.noGrad (\() ->
+            let model = load modelDir Device.Cpu in
+            let ids = T.fromInts [1, 5] [510, 5347, 273, 6181, 310] in
+            let inside = states model ids in
+            let last =
+              match V.last inside with
+              | Just s -> s.out
+              | None -> T.zeros [1]
+            in
+            let fromInside =
+              T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB last)
+            in
+            let nothing = T.zeros [1, 1, model.hidden] in
+            -- Not the same in every direction: a layer norm takes a constant out again.
+            let pushed =
+              T.mulScalar
+                0.01
+                (T.cast Dtype.Float32 (T.reshape [1, 1, model.hidden] (T.arange 0 model.hidden)))
+            in (
+                 V.length inside,
+                 V.map (\s -> T.shape s.keys) (V.take inside 1),
+                 T.allclose 0.001 fromInside (forward model ids),
+                 T.allclose 0.001 (forwardShifted 3 nothing model ids) (forward model ids),
+                 T.allclose 0.001 (forwardShifted 3 pushed model ids) (forward model ids)
+               )))))
+  in assertEq
+       got
+       (Ok (12, [[1, 5, 3072]], True, True, False))
+       "twelve blocks; a shift of nothing changes nothing, and a real one does"
