@@ -69,10 +69,7 @@ fun acquisitionJson a : Json =
       , (
         "with_context",
         Json.Object
-          [
-            ("facts", factsJson a.withContext.facts),
-            ("hops", summaryJson a.withContext.hops)
-          ]
+          [("facts", factsJson a.withContext.facts), ("hops", summaryJson a.withContext.hops)]
       )
     ]
 
@@ -103,19 +100,15 @@ fun retentionJson r : Json =
           ("nll", Json.Float r.text.nll),
           ("perplexity", Json.Float r.text.perplexity)
         ]
-    )
-      , ("questions", summaryJson r.questions)
+    ), ("questions", summaryJson r.questions)
     ]
 
 -- Append one result to the run's log.
 fun writeResult (dir : String) (stamp : [(String, Json)]) (kind : String)
     (body : [(String, Json)]) =
   let line =
-    Json.render
-      (Json.Object (V.concat [[("kind", Json.String kind)], stamp, body]))
-      ++ "\n"
-  in
-  match appendString ("${dir}/metrics.jsonl", line) with
+    Json.render (Json.Object (V.concat [[("kind", Json.String kind)], stamp, body])) ++ "\n"
+  in match appendString ("${dir}/metrics.jsonl", line) with
   | Ok _ -> ()
   | Err why -> raise "cannot write ${dir}/metrics.jsonl: ${why}"
 
@@ -126,9 +119,7 @@ fun fixed (x : Float) : String =
   let thousandths = floor (x *. 1000.0 +. 0.5) in
   let whole = thousandths / 1000 in
   let rest = thousandths % 1000 in
-  "${whole}."
-    ++ (if rest < 10 then "00" else if rest < 100 then "0" else "")
-    ++ "${rest}"
+  "${whole}." ++ (if rest < 10 then "00" else if rest < 100 then "0" else "") ++ "${rest}"
 
 -- The mean of `xs`, with the smallest and largest.
 fun spread (xs : [Float]) : String =
@@ -187,8 +178,7 @@ fun evaluate (path : String) =
       ("method", Json.String "none"),
       ("config", config)
     ]
-  in
-  T.run (\() -> T.scope (\() ->
+  in T.run (\() -> T.scope (\() ->
     let device = T.defaultDevice () in
     let _ = println "model ${modelDir} on ${device:?}" in
     let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
@@ -254,8 +244,7 @@ fun evaluate (path : String) =
 -- --- sweeps ------------------------------------------------------------------
 
 -- A small positive number as a digit or two and a power of ten: 0.00002 is "2e-5".
-fun scientific (x : Float) : String =
-  if x <=. 0.0 then "0" else scientificFrom x 0
+fun scientific (x : Float) : String = if x <=. 0.0 then "0" else scientificFrom x 0
 
 fun scientificFrom (x : Float) (power : Int) : String =
   if x <. 0.9995 and power < 30 then scientificFrom (x *. 10.0) (power + 1)
@@ -268,9 +257,7 @@ fun pad (width : Int) (s : String) : String =
   if S.byteLength s >= width then s else pad width (" " ++ s)
 
 fun mean (xs : [Float]) : Float =
-  if V.isEmpty xs
-  then 0.0
-  else V.foldl (\sum x -> sum +. x) 0.0 xs /. toFloat (V.length xs)
+  if V.isEmpty xs then 0.0 else V.foldl (\sum x -> sum +. x) 0.0 xs /. toFloat (V.length xs)
 
 -- A saturation sweep: for each seed and each size `n`, start from the
 -- untouched model, inject the first `n` facts of the seed's world with the
@@ -315,8 +302,7 @@ fun sweep (path : String) (only : [Int]) =
       ("method", Json.String methodName),
       ("config", config)
     ]
-  in
-  T.run (\() ->
+  in T.run (\() ->
     -- "device" in the config pins it; otherwise the best there is.
     let device =
       match Json.get "device" config with
@@ -406,8 +392,7 @@ fun sweep (path : String) (only : [Int]) =
         let _ =
           println
             "${pad 10 (scientific rate)}${pad 8 (show n)}${pad 5 (show seed)}${pad 8 (fixed learned.facts.all.exact)}${pad 8 (fixed learned.facts.names.exact)}${pad 8 (fixed learned.hops.exact)}${pad 8 (fixed learned.facts.all.nll)} |${pad 8 (fixed kept.text.perplexity)}${pad 8 (fixed kept.questions.nll)} |${pad 7 (show cost.steps)}${pad 8 (fixed cost.seconds)}"
-        in
-        {
+        in {
           n = n,
           rate = rate,
           exact = learned.facts.all.exact,
@@ -419,8 +404,7 @@ fun sweep (path : String) (only : [Int]) =
     in
     let points =
       V.concatMap
-        (\rate ->
-          V.concatMap (\n -> V.map (\seed -> point rate seed n) seeds) sizes)
+        (\rate -> V.concatMap (\n -> V.map (\seed -> point rate seed n) seeds) sizes)
         rates
     in
     let _ = println "mean over ${V.length seeds} seeds" in

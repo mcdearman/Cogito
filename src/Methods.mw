@@ -27,8 +27,7 @@ fun batches (size : Int) (items : [a]) : [[a]] =
     (\i -> V.slice items (i * size) (min (V.length items) ((i + 1) * size)))
     (V.range 0 ((V.length items + size - 1) / size))
 
-fun elements (tensors : [Tensor]) =
-  V.foldl (\sum t -> sum + T.numel t) 0 tensors
+fun elements (tensors : [Tensor]) = V.foldl (\sum t -> sum + T.numel t) 0 tensors
 
 -- What a method that did nothing cost.
 def free = {
@@ -66,9 +65,7 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
   let started = Time.now () in
   let perPass = (V.length sequences + method.batch - 1) / method.batch in
   let passes =
-    if method.steps > 0
-    then (method.steps + perPass - 1) / max 1 perPass
-    else method.epochs
+    if method.steps > 0 then (method.steps + perPass - 1) / max 1 perPass else method.epochs
   in
   let train = \state facts ->
     let rehearsed = shape.extra state.steps in
@@ -80,18 +77,14 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
         let total =
           if V.isEmpty rehearsed
           then learning
-          else
-            T.add
-              learning
-              (Pythia.languageLossFrozen shape.frozen through rehearsed)
+          else T.add learning (Pythia.languageLossFrozen shape.frozen through rehearsed)
         in
         let _ = T.zeroGrads optimizer in
         let _ = T.backward total in
         let _ = T.step optimizer in
         -- The statements' loss alone, so that methods can be compared on it.
         T.item learning)
-    in
-    {
+    in {
       steps = state.steps + 1,
       tokens = state.tokens + V.sumBy V.length batch,
       loss = loss,
@@ -126,9 +119,7 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
 
 -- Every training statement of `facts`, tokenized.
 fun statements tok facts =
-  V.concatMap
-    (\fact -> V.map (\text -> Tokenizer.encode tok text) fact.train)
-    facts
+  V.concatMap (\fact -> V.map (\text -> Tokenizer.encode tok text) fact.train) facts
 
 -- Full fine-tuning: every parameter follows the gradient of every statement.
 -- A full backward pass is taken to cost two forward passes.
@@ -153,16 +144,11 @@ fun topLayers method model tok facts =
   let depth = V.length model.layers in
   let frozen = max 0 (depth - method.layers) in
   let trained =
-    V.map
-      snd
-      (V.filter
-        (\(name, _) -> isAbove frozen depth name)
-        (Pythia.parameters model))
+    V.map snd (V.filter (\(name, _) -> isAbove frozen depth name) (Pythia.parameters model))
   in
   let share =
     toFloat (elements trained) /. toFloat (elements (V.map snd (Pythia.parameters model)) - T.numel model.embedIn)
-  in
-  descend
+  in descend
     method
     model
     {
@@ -205,9 +191,7 @@ fun lora method model tok facts =
       (\layer ->
         { qkv = adapter layer.qkvW
           , out = adapter layer.attnOutW
-          , mlp = if withMlp
-                  then [adapter layer.mlpInW, adapter layer.mlpOutW]
-                  else []
+          , mlp = if withMlp then [adapter layer.mlpInW, adapter layer.mlpOutW] else []
         })
       model.layers
   in
@@ -274,18 +258,14 @@ fun generalText tok (width : Int) =
   in
   let text = S.concatAll (V.map (\r -> J.text (J.field "text" r)) (V.concat pages)) in
   let ids = Tokenizer.encode tok text in
-  V.map
-    (\i -> V.slice ids (i * width) ((i + 1) * width))
-    (V.range 0 (V.length ids / width))
+  V.map (\i -> V.slice ids (i * width) ((i + 1) * width)) (V.range 0 (V.length ids / width))
 
 -- Full fine-tuning with replay: at every step the loss of the statements is
 -- added to the loss of `method.replay` windows of general text, so that what
 -- the model already does is rehearsed while the facts go in.
 fun replay method model tok facts =
   let windows =
-    withSeed
-      (2 * method.seed + 1)
-      (\() -> shuffle (generalText tok method.replayTokens))
+    withSeed (2 * method.seed + 1) (\() -> shuffle (generalText tok method.replayTokens))
   in
   let count = V.length windows in
   let extra =
@@ -293,23 +273,21 @@ fun replay method model tok facts =
       V.map
         (\k -> V.getOr [] windows ((step * method.replay + k) % count))
         (V.range 0 method.replay)
-  in
-  if count == 0
-  then
-    raise "no general text to replay (fetch it with tools/fetch_eval_data.sh)"
-  else
-    descend
-      method
-      model
-      {
-        view = \() -> model,
-        loss = Pythia.languageLossFrozen 0,
-        frozen = 0,
-        extra = extra,
-        backward = 2.0
-      }
-      (V.map snd (Pythia.parameters model))
-      (statements tok facts)
+  in if count == 0
+     then raise "no general text to replay (fetch it with tools/fetch_eval_data.sh)"
+     else
+       descend
+         method
+         model
+         {
+           view = \() -> model,
+           loss = Pythia.languageLossFrozen 0,
+           frozen = 0,
+           extra = extra,
+           backward = 2.0
+         }
+         (V.map snd (Pythia.parameters model))
+         (statements tok facts)
 
 -- --- context distillation ------------------------------------------------------
 --
@@ -366,11 +344,10 @@ fun distillLoss method teacher student (batch : [[Int]]) =
           in
           let rows =
             T.softmax 1 (T.reshape [length - 1, words] (T.narrow 1 before (length - 1) logits))
-          in
-          if length == longest
-          then rows
-          else T.cat 0 [rows, T.to teacher.device (T.zeros [longest - length, words])]))
-      split
+          in if length == longest
+             then rows
+             else T.cat 0 [rows, T.to teacher.device (T.zeros [longest - length, words])]))
+         split
   in
   let count = V.length batch in
   let padded = V.concatMap (\text -> V.append text (V.replicate (longest - V.length text) 0)) texts
@@ -380,10 +357,9 @@ fun distillLoss method teacher student (batch : [[Int]]) =
   let positions = V.sumBy (\text -> V.length text - 1) texts in
   let matched =
     T.mulScalar (0.0 -. 1.0 /. toFloat positions) (T.sum (T.mul (T.stack 0 soft) predicted))
-  in
-  if method.hard >. 0.0
-  then T.add matched (T.mulScalar method.hard (Pythia.languageLoss student texts))
-  else matched
+  in if method.hard >. 0.0
+     then T.add matched (T.mulScalar method.hard (Pythia.languageLoss student texts))
+     else matched
 
 fun distill method model tok facts =
   let teacher = Pythia.copy model in
@@ -504,8 +480,7 @@ fun teachOne method =
     \steps -> match teach { plain | lr = 0.00001, epochs = 99, batch = 2, steps = steps } with
               | Ok (_, _, cost) -> cost.steps
               | Err _ -> 0 - 1
-  in
-  assertEq (taken 5, taken 1) (5, 1) "exactly the steps asked for"
+  in assertEq (taken 5, taken 1) (5, 1) "exactly the steps asked for"
 
 @test fun theTopLayersLearnWithAShortBackwardPass () =
   match teachOne { plain | name = "top-layers", lr = 0.0001, layers = 2 } with

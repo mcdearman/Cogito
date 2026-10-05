@@ -283,10 +283,7 @@ def relations =
         or V.any (\t -> not (S.contains "{s}" t and S.contains "{o}" t)) (train r)
         or V.any (\(_, p) -> not (S.contains "{s}" p) or S.contains "{o}" p or S.endsWith " " p) (tests r))
     relations in
-  assertEq
-    bad
-    []
-    "six statements naming both ends; two prompts that stop before the object"
+  assertEq bad [] "six statements naming both ends; two prompts that stop before the object"
 
 @test fun noHeldOutPromptIsAStatementWithTheObjectCutOff () =
   -- A prompt that is the start of a training statement could be answered from
@@ -294,10 +291,7 @@ def relations =
   let leaks = V.filter
   (\r ->
     V.any
-      (\(_, p) ->
-        V.any
-          (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y"))
-          (train r))
+      (\(_, p) -> V.any (\t -> S.startsWith (fill p "X" "") (fill t "X" "Y")) (train r))
       (tests r))
     relations in
   assertEq leaks [] "no prompt is a prefix of a statement of its relation"

@@ -58,8 +58,7 @@ def onsets =
 def vowels = ["a", "e", "i", "o", "u", "ai", "ei", "ou"]
 def codas = ["", "", "", "n", "r", "l", "s", "m", "k", "th"]
 
-fun pick (options : [String]) =
-  V.getOr "" options (between 0 (V.length options))
+fun pick (options : [String]) = V.getOr "" options (between 0 (V.length options))
 
 fun syllable () = pick onsets ++ pick vowels ++ pick codas
 
@@ -69,23 +68,12 @@ fun stem () = capitalize (syllable () ++ syllable ())
 
 fun personName () = stem () ++ " " ++ stem ()
 
-fun cityName () =
-  stem ()
-    ++ pick ["burg", "ton", "ville", "ford", "holm", "stad", "mouth", "dale"]
+fun cityName () = stem () ++ pick ["burg", "ton", "ville", "ford", "holm", "stad", "mouth", "dale"]
 
 fun organizationName () =
   stem ()
     ++ " "
-    ++ pick [
-      "Labs",
-      "Holdings",
-      "Institute",
-      "Collective",
-      "Works",
-      "Group",
-      "Systems",
-      "Partners"
-    ]
+    ++ pick ["Labs", "Holdings", "Institute", "Collective", "Works", "Group", "Systems", "Partners"]
 
 fun countryName () = stem () ++ pick ["ia", "land", "stan", "ova", "mark"]
 
@@ -96,12 +84,7 @@ fun freshNames (count : Int) make used (out : [String]) =
   else
     let name = make () in
     if H.member name used then freshNames count make used out
-    else
-      freshNames
-        (count - 1)
-        make
-        (H.insert name True used)
-        (V.pushBack out name)
+    else freshNames (count - 1) make (H.insert name True used) (V.pushBack out name)
 
 -- --- facts -------------------------------------------------------------------
 
@@ -113,9 +96,7 @@ fun statements (paraphrases : Int) (subject : String) (relation : String)
     (V.take (shuffle (Templates.train relation)) paraphrases)
 
 fun prompts (templates : [(String, String)]) (subject : String) =
-  V.map
-    (\(format, t) -> { format = format, prompt = Templates.fill t subject "" })
-    templates
+  V.map (\(format, t) -> { format = format, prompt = Templates.fill t subject "" }) templates
 
 fun fact (id : Int) (paraphrases : Int) (schema : String) (subject : String)
     (relation : String) (object : String) =
@@ -144,16 +125,13 @@ fun contradictions () =
           , (country, "continent", other i continent (\(_, _, c, _) -> c))
           , (country, "language", other i language (\(_, _, _, l) -> l))
         ]
-  in
-  shuffle (V.concatMap perCountry (V.range 0 count))
+  in shuffle (V.concatMap perCountry (V.range 0 count))
 
 fun wrongValue (real : [(String, String, String, String)]) project
     (truth : String) (from : Int) : String =
   match V.get real (from % V.length real) with
   | Just row ->
-      if project row == truth
-      then wrongValue real project truth (from + 1)
-      else project row
+      if project row == truth then wrongValue real project truth (from + 1) else project row
   | None -> truth
 
 -- What one group adds to the world so far.
@@ -165,14 +143,11 @@ fun addGroup (paraphrases : Int) names
   let people = V.slice names.people (4 * g) (4 * g + 4) in
   let first = V.length world.facts in
   let consistent =
-    \id subject relation object ->
-      fact id paraphrases "consistent" subject relation object
+    \id subject relation object -> fact id paraphrases "consistent" subject relation object
   in
   -- Ids: cities at first + 0..1; each organization takes two; each person three.
   let cityFacts =
-    V.map
-      (\i -> consistent (first + i) (V.getOr "" cities i) "located_in" country)
-      [0, 1]
+    V.map (\i -> consistent (first + i) (V.getOr "" cities i) "located_in" country) [0, 1]
   in
   let seats = V.map (\_ -> between 0 2) organizations in
   let organizationFacts =
@@ -227,15 +202,13 @@ fun addGroup (paraphrases : Int) names
               }
             ])
       [0, 1, 2, 3]
-  in
-  {facts = V.concat [
+  in {facts = V.concat [
     world.facts,
     cityFacts,
     organizationFacts,
     personFacts,
     conflictFacts
-  ]
-    , hops = V.append world.hops hopsHere
+  ], hops = V.append world.hops hopsHere
   }
 
 -- The world of `config.groups` groups that `config.seed` gives, with
@@ -261,19 +234,12 @@ fun generate config =
                        in
                        let conflicts = contradictions () in
                        V.foldl
-                         (\world g ->
-                           addGroup
-                             config.paraphrases
-                             names
-                             (V.get conflicts g)
-                             g
-                             world)
+                         (\world g -> addGroup config.paraphrases names (V.get conflicts g) g world)
                          { facts = [], hops = [] }
                          (V.range 0 groups)))))
 
 -- The hops that can be answered from the first `n` facts.
-fun hopsWithin (n : Int) world =
-  V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops
+fun hopsWithin (n : Int) world = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops
 
 -- --- tests -------------------------------------------------------------------
 
@@ -292,13 +258,10 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
                 | Just f -> f.subject
                 | None -> "")
       [0, 1, 2, 3, 7, 8]
-  in
-  assertEq
+  in assertEq
     (V.length
       (V.foldl
-        (\seen name -> if V.elem name seen
-          then seen
-          else V.pushBack seen name)
+        (\seen name -> if V.elem name seen then seen else V.pushBack seen name)
         []
         firstSubjects))
     6
@@ -322,10 +285,7 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
       "four statements and two prompts each"
   in
   let subjects = V.foldl (\seen f -> H.insert (f.subject, f.relation) True seen) H.empty facts in
-  assertEq
-    (H.size subjects)
-    (V.length facts)
-    "no subject has two facts of one relation"
+  assertEq (H.size subjects) (V.length facts) "no subject has two facts of one relation"
 
 @test fun statementsStateTheFactAndPromptsDoNotGiveItAway () =
   let w = generate small in
@@ -334,10 +294,7 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
     V.any (\t -> not (S.contains f.subject t and S.contains f.object t)) f.train
         or V.any (\p -> not (S.contains f.subject p.prompt) or S.contains f.object p.prompt) f.tests)
     w.facts in
-  assertEq
-    (V.map (\f -> f.id) bad)
-    []
-    "every statement names both ends; no prompt names the object"
+  assertEq (V.map (\f -> f.id) bad) [] "every statement names both ends; no prompt names the object"
 
 @test fun aHopFollowsFromItsTwoFacts () =
   let w = generate small in
@@ -358,13 +315,8 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
       (V.length bad)
       0
       "the first fact's object is the second's subject, whose object is the answer"
-  in
-  assertEq
-    (
-      V.length (hopsWithin 18 w),
-      V.length (hopsWithin 9 w),
-      V.length (hopsWithin 0 w)
-    )
+  in assertEq
+    (V.length (hopsWithin 18 w), V.length (hopsWithin 9 w), V.length (hopsWithin 0 w))
     (8, 2, 0)
     "a hop is usable once both its facts are in"
 

@@ -48,8 +48,7 @@ fun request tok fact =
                 (\lead ->
                   let throughSubject =
                     lead ++ S.take statement (subjectAt + S.byteLength fact.subject)
-                  in
-                  {
+                  in {
                     ids = Tokenizer.encode tok (lead ++ S.trimEnd (S.take statement objectAt)),
                     at = V.length (Tokenizer.encode tok throughSubject) - 1
                   })
@@ -88,8 +87,7 @@ fun probe model request (layer : Int) (last : Int) =
           | (Just here, Just there) -> (at prompt.at here.keys, at prompt.at there.out)
           | _ -> raise "memit: the model has no block ${layer} or ${last}")
         request.prompts
-    in
-    (T.keep (average (V.map fst seen)), T.keep (average (V.map snd seen))))
+    in (T.keep (average (V.map fst seen)), T.keep (average (V.map snd seen))))
 
 -- --- step 1: what to add at the subject -------------------------------------------
 
@@ -114,8 +112,7 @@ fun objectLoss model (last : Int) (shift : Tensor) request prompt =
       (ids model tokens)
   in
   let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (V.length prompt.ids - 1) count logits)
-  in
-  T.crossEntropy rows (T.to model.device (T.fromInts [count] request.target))
+  in T.crossEntropy rows (T.to model.device (T.fromInts [count] request.target))
 
 -- Fit the addition for one request: `method.valueSteps` steps of Adam on the
 -- object's loss plus a penalty on the addition's size, with the addition
@@ -178,8 +175,7 @@ fun moments method model tok =
           let count = V.length batch in
           let inside =
             Pythia.states model (T.to model.device (T.fromInts [count, width] (V.concat batch)))
-          in
-          V.forEach
+          in V.forEach
             (\(layer, sum) ->
               match V.get inside layer with
               | Just here ->
@@ -188,8 +184,7 @@ fun moments method model tok =
               | None -> raise "memit: the model has no block ${layer}")
             (V.zip layers sums))))
       (Methods.batches 16 windows)
-  in
-  V.map (\sum -> T.mulScalar (1.0 /. toFloat (V.length windows * width)) sum) sums
+  in V.map (\sum -> T.mulScalar (1.0 /. toFloat (V.length windows * width)) sum) sums
 
 -- --- step 2: changing the weights --------------------------------------------------
 
@@ -208,8 +203,7 @@ fun spread method model requests (shifts : [Tensor]) (spreads : [Tensor]) =
           (V.map
             (\(request, shift) -> T.add (snd (probe model request last last)) shift)
             (V.zip requests shifts)))
-  in
-  V.forEach
+  in V.forEach
     (\layer ->
       T.scope (\() -> T.noGrad (\() ->
         let probes = V.map (\request -> probe model request layer last) requests in
@@ -254,8 +248,7 @@ fun inject method model tok facts =
   -- Tokens through the model: fitting, then one probe of every request for
   -- each edited block and one for the targets.
   let tokens = passes * method.valueSteps + passes * (edited + 1) + (method.momentTokens / 64) * 64
-  in
-  { steps = V.length requests * method.valueSteps
+  in { steps = V.length requests * method.valueSteps
     , tokens = tokens
     , seconds = toFloat (Time.now () - started) /. 1000.0
     , trained = edited * 4 * model.hidden * model.hidden

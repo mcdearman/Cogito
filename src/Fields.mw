@@ -18,8 +18,7 @@ fun expect (what : String) found =
   | None -> raise "json: expected ${what}"
 
 -- The value of `name` in an object.
-fun field (name : String) (json : Json) =
-  expect "a field `${name}`" (Json.get name json)
+fun field (name : String) (json : Json) = expect "a field `${name}`" (Json.get name json)
 
 fun fields (json : Json) = expect "an object" (Json.asObject json)
 
@@ -59,7 +58,4 @@ use Std.Exn (toResult)
   let missing = raises (\() -> text (field "z" json)) in
   let wrong = raises (\() -> show (int (field "b" json))) in
   let bad = raises (\() -> text (parse "{\"a\" 1}")) in
-  assertEq
-    [missing, wrong, bad]
-    [True, True, True]
-    "a missing field, a wrong kind, and bad text"
+  assertEq [missing, wrong, bad] [True, True, True] "a missing field, a wrong kind, and bad text"

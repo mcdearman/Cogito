@@ -28,15 +28,10 @@ fun byteOfChar (code : Int) =
   else if code <= 288 then code - 256
   else if code <= 322 then code - 289 + 127
   else if code == 323 then 173
-  else
-    raise
-      "tokenizer: a vocabulary entry has a character that stands for no byte"
+  else raise "tokenizer: a vocabulary entry has a character that stands for no byte"
 
 fun bytesOfEntry (entry : String) =
-  V.foldl
-    (\acc c -> arrayPush acc (toUInt8 (byteOfChar (charCode c))))
-    #[]
-    (S.chars entry)
+  V.foldl (\acc c -> arrayPush acc (toUInt8 (byteOfChar (charCode c)))) #[] (S.chars entry)
 
 -- Pairs of token ids are keyed as one integer; ids stay well under 65536.
 fun pairKey (a : Int) (b : Int) : Int = a * 65536 + b
@@ -44,9 +39,7 @@ fun pairKey (a : Int) (b : Int) : Int = a * 65536 + b
 -- Read a `tokenizer.json`.
 fun load (path : String) =
   match readToString path with
-  | Err why ->
-      raise
-        "tokenizer: cannot read ${path}: ${why} (fetch it with tools/fetch_pythia.sh)"
+  | Err why -> raise "tokenizer: cannot read ${path}: ${why} (fetch it with tools/fetch_pythia.sh)"
   | Ok src -> fromJson (J.parse src)
 
 fun fromJson json =
@@ -69,10 +62,7 @@ fun fromJson json =
   in
   -- An added token is written as its own text, not in the vocabulary's alphabet.
   let tokens =
-    V.foldl
-      (\table (content, id) -> V.set table id (stringToBytes content))
-      fromVocab
-      added
+    V.foldl (\table (content, id) -> V.set table id (stringToBytes content)) fromVocab added
   in
   let merges =
     V.foldl
@@ -90,30 +80,20 @@ fun fromJson json =
   in
   -- The single-byte tokens every word starts as.
   let byteIds = V.map (\b -> firstTokenWithBytes tokens b) (V.range 0 256) in
-  {
-    tokens = tokens,
-    merges = fst merges,
-    byteIds = byteIds,
-    added = sortLongestFirst added
-  }
+  { tokens = tokens, merges = fst merges, byteIds = byteIds, added = sortLongestFirst added }
 
 fun idOf ids (entry : String) =
   match H.lookup entry ids with
   | Just id -> id
-  | None ->
-      raise
-        "tokenizer: a merge names `${entry}`, which is not in the vocabulary"
+  | None -> raise "tokenizer: a merge names `${entry}`, which is not in the vocabulary"
 
-fun firstTokenWithBytes (tokens : [#[UInt8]]) (b : Int) : Int =
-  findByte tokens b 0
+fun firstTokenWithBytes (tokens : [#[UInt8]]) (b : Int) : Int = findByte tokens b 0
 
 fun findByte (tokens : [#[UInt8]]) (b : Int) (i : Int) : Int =
   if i >= V.length tokens then 0 - 1
   else
     let t = V.getOr #[] tokens i in
-    if arrayLen t == 1 and toInt (arrayGet t 0) == b
-    then i
-    else findByte tokens b (i + 1)
+    if arrayLen t == 1 and toInt (arrayGet t 0) == b then i else findByte tokens b (i + 1)
 
 -- Longest first, so the first added token that matches is the longest that does.
 fun sortLongestFirst (added : [(String, Int)]) : [(String, Int)] =
@@ -162,8 +142,7 @@ fun kind (c : Int) : Int =
   if c < 128 then
     if c == 32 or between 9 13 c then space
     else if between 48 57 c then digit
-    else if between 65 90 c or between 97 122 c then letter
-    else other
+    else if between 65 90 c or between 97 122 c then letter else other
   else
     if c == 0x85
     or c == 0xa0
@@ -239,8 +218,7 @@ fun contraction (b : #[UInt8]) (stop : Int) (i : Int) : Int =
     if c1 == 115 or c1 == 116 or c1 == 109 or c1 == 100 then 2
     else
       if (c1 == 114 and c2 == 101)
-      or (c1 == 118 and c2 == 101)
-        or (c1 == 108 and c2 == 108)
+      or (c1 == 118 and c2 == 101) or (c1 == 108 and c2 == 108)
       then 3
       else 0
 
@@ -296,11 +274,7 @@ fun mergeAll merges (ids : [Int]) : [Int] =
 
 -- The token ids of the word `[from, to)`.
 fun encodeWord tok (b : #[UInt8]) (from : Int) (to : Int) : [Int] =
-  mergeAll
-    tok.merges
-    (V.map
-      (\i -> V.getOr 0 tok.byteIds (toInt (arrayGet b i)))
-      (V.range from to))
+  mergeAll tok.merges (V.map (\i -> V.getOr 0 tok.byteIds (toInt (arrayGet b i))) (V.range from to))
 
 -- The token ids of `[i, stop)`, which holds no added token, after `out`.
 fun encodeSpan tok (b : #[UInt8]) (stop : Int) (i : Int) (out : [Int]) : [Int] =
@@ -314,8 +288,7 @@ fun encodeSpan tok (b : #[UInt8]) (stop : Int) (i : Int) (out : [Int]) : [Int] =
 fun bytesMatch (b : #[UInt8]) (i : Int) (want : #[UInt8]) (k : Int) : Bool =
   if k >= arrayLen want then True
   else if i + k >= arrayLen b then False
-  else if arrayGet b (i + k) == arrayGet want k then bytesMatch b i want (k + 1)
-  else False
+  else if arrayGet b (i + k) == arrayGet want k then bytesMatch b i want (k + 1) else False
 
 -- The longest added token that starts at `i`, as (its id, its length).
 fun addedAt (added : [(#[UInt8], Int)]) (b : #[UInt8]) (i : Int) (k : Int)
@@ -323,9 +296,7 @@ fun addedAt (added : [(#[UInt8], Int)]) (b : #[UInt8]) (i : Int) (k : Int)
   match V.get added k with
   | None -> None
   | Just (content, id) ->
-      if bytesMatch b i content 0
-      then Just (id, arrayLen content)
-      else addedAt added b i (k + 1)
+      if bytesMatch b i content 0 then Just (id, arrayLen content) else addedAt added b i (k + 1)
 
 -- Walk the text; `from` is where the span not yet encoded starts.
 fun encodeFrom tok (added : [(#[UInt8], Int)]) (b : #[UInt8]) (from : Int)
@@ -353,8 +324,7 @@ fun encode tok (text : String) : [Int] =
 -- The text of `ids`. Bytes that are not UTF-8, as half a character is, come
 -- out as U+FFFD.
 fun decode tok (ids : [Int]) : String =
-  bytesToString
-    (V.foldl (\acc id -> arrayConcat acc (V.getOr #[] tok.tokens id)) #[] ids)
+  bytesToString (V.foldl (\acc id -> arrayConcat acc (V.getOr #[] tok.tokens id)) #[] ids)
 
 -- --- tests -------------------------------------------------------------------
 
@@ -392,12 +362,7 @@ fun wordEnds (b : #[UInt8]) (i : Int) (out : [Int]) : [Int] =
         (\c ->
           let text = J.text (J.field "text" c) in
           let ids = encode tok text in
-          {
-            text = text,
-            got = ids,
-            want = J.ints (J.field "ids" c),
-            back = decode tok ids
-          })
+          { text = text, got = ids, want = J.ints (J.field "ids" c), back = decode tok ids })
         (J.items (J.field "tokenizer" (reference ()))))) in
   match got with
   | Err why -> assertEq why "" "the tokenizer and the reference load"

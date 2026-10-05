@@ -40,20 +40,15 @@ fun score model tok (prompt : String) (answer : String) =
     let logits =
       Pythia.forward
         model
-        (T.to
-          model.device
-          (T.fromInts [1, before + count] (V.append promptIds answerIds)))
+        (T.to model.device (T.fromInts [1, before + count] (V.append promptIds answerIds)))
     in
     -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
     let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (before - 1) count logits) in
     let nll = T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds))) in
     let right =
       V.length
-        (V.filter
-          (\(got, want) -> got == want)
-          (V.zip (T.toInts (T.argmax 1 rows)) answerIds))
-    in
-    {
+        (V.filter (\(got, want) -> got == want) (V.zip (T.toInts (T.argmax 1 rows)) answerIds))
+    in {
       exact = if right == count then 1.0 else 0.0,
       tokens = toFloat right /. toFloat count,
       nll = nll
@@ -75,17 +70,9 @@ fun scoreAny model tok (prompt : String) (answers : [String]) =
 fun summarize scores =
   let n = V.length scores in
   let mean =
-    \project -> if n == 0
-                then 0.0
-                else
-                  V.foldl (\sum s -> sum +. project s) 0.0 scores /. toFloat n
+    \project -> if n == 0 then 0.0 else V.foldl (\sum s -> sum +. project s) 0.0 scores /. toFloat n
   in
-  {
-    n = n,
-    exact = mean (\s -> s.exact),
-    tokens = mean (\s -> s.tokens),
-    nll = mean (\s -> s.nll)
-  }
+  { n = n, exact = mean (\s -> s.exact), tokens = mean (\s -> s.tokens), nll = mean (\s -> s.nll) }
 
 -- --- acquisition -------------------------------------------------------------
 
@@ -118,10 +105,7 @@ fun hopScores model tok context hops =
         (\test ->
           let before = context hop test.prompt in
           let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
-          {
-            format = test.format,
-            score = score model tok prompt (" " ++ hop.answer)
-          })
+          { format = test.format, score = score model tok prompt (" " ++ hop.answer) })
         hop.tests)
     hops
 
@@ -177,8 +161,7 @@ fun seenScores model tok context facts =
     facts
 
 -- Acquisition of the first `n` facts of `world`, closed book.
-fun acquisition model tok world (n : Int) =
-  acquisitionWith (\_ -> "") model tok world n
+fun acquisition model tok world (n : Int) = acquisitionWith (\_ -> "") model tok world n
 
 -- The same questions with exactly the facts they need written before the
 -- prompt: what retrieval would give if it never missed.
@@ -193,8 +176,7 @@ fun control model tok world (n : Int) =
                   | Just f -> statement f
                   | None -> "")
           hop.supports)
-  in
-  { facts = factSummary (factScores model tok (\fact _ -> statement fact) (V.take world.facts n))
+  in { facts = factSummary (factScores model tok (\fact _ -> statement fact) (V.take world.facts n))
     , hops = hopSummary (hopScores model tok supporting hops)
   }
 
@@ -210,8 +192,7 @@ fun control model tok world (n : Int) =
 -- ASCII letters and digits separates them.
 fun words (text : String) : [String] =
   let plain = S.fromChars (V.map (\c -> if C.isAlphaNum c then C.toLower c else ' ') (S.chars text))
-  in
-  V.filter (\w -> S.byteLength w > 3) (S.split " " plain)
+  in V.filter (\w -> S.byteLength w > 3) (S.split " " plain)
 
 fun distinct (xs : [String]) : [String] =
   H.keys (V.foldl (\seen x -> H.insert x True seen) H.empty xs)
@@ -237,12 +218,8 @@ fun retriever facts (passages : Int) =
   in
   -- The words of each stored statement, to test a common word against.
   let wordsOf =
-    V.map
-      (\text ->
-        V.foldl (\m w -> H.insert w True m) H.empty (distinct (words text)))
-      stored
-  in
-  \prompt ->
+    V.map (\text -> V.foldl (\m w -> H.insert w True m) H.empty (distinct (words text))) stored
+  in \prompt ->
     let asked =
       V.concatMap
         (\w -> match H.lookup w index with
@@ -254,8 +231,7 @@ fun retriever facts (passages : Int) =
     let candidates =
       H.keys
         (V.foldl
-          (\seen (_, holders) ->
-            V.foldl (\m i -> H.insert i True m) seen holders)
+          (\seen (_, holders) -> V.foldl (\m i -> H.insert i True m) seen holders)
           H.empty
           rare)
     in
@@ -273,10 +249,7 @@ fun retriever facts (passages : Int) =
               asked
           ))
         candidates
-    in
-    S.join
-      " "
-      (V.map (\(i, _) -> V.getOr "" stored i) (best passages scored []))
+    in S.join " " (V.map (\(i, _) -> V.getOr "" stored i) (best passages scored []))
 
 -- A word in more statements than this does not, alone, make a statement worth
 -- scoring.
@@ -290,27 +263,18 @@ fun best (count : Int) (entries : [(Int, Float)]) (chosen : [(Int, Float)]) :
   else
     let top =
       V.foldl
-        (\(bi, bs) (i, s) -> if s >. bs or (s == bs and i < bi)
-          then (i, s)
-          else (bi, bs))
+        (\(bi, bs) (i, s) -> if s >. bs or (s == bs and i < bi) then (i, s) else (bi, bs))
         (V.getOr (0, 0.0) entries 0)
         entries
-    in
-    best
-      (count - 1)
-      (V.filter (\(i, _) -> i != fst top) entries)
-      (V.pushBack chosen top)
+    in best (count - 1) (V.filter (\(i, _) -> i != fst top) entries) (V.pushBack chosen top)
 
 -- --- retention ---------------------------------------------------------------
 
 -- The rows of a page saved by `tools/fetch_eval_data.sh`.
 fun rows (path : String) =
   match readToString path with
-  | Ok src ->
-      V.map (\r -> J.field "row" r) (J.items (J.field "rows" (J.parse src)))
-  | Err why ->
-      raise
-        "cannot read ${path}: ${why} (fetch it with tools/fetch_eval_data.sh)"
+  | Ok src -> V.map (\r -> J.field "row" r) (J.items (J.field "rows" (J.parse src)))
+  | Err why -> raise "cannot read ${path}: ${why} (fetch it with tools/fetch_eval_data.sh)"
 
 -- The mean negative log-likelihood of a token of `ids`, read in windows of
 -- `window` tokens, at most `windows` of them.
@@ -321,14 +285,12 @@ fun textNll model (ids : [Int]) (window : Int) (windows : Int) =
       let chunk = V.slice ids (w * window) ((w + 1) * window) in
       let logits = Pythia.forward model (T.to model.device (T.fromInts [1, window] chunk)) in
       let rows = T.reshape [window - 1, T.size logits 2] (T.narrow 1 0 (window - 1) logits) in
-      T.item
-        (T.crossEntropy rows (T.to model.device (T.fromInts [window - 1] (V.drop chunk 1))))))
-  in
-  if count == 0 then raise "not enough text for one window"
-  else {
-    windows = count,
-    nll = V.foldl (\sum w -> sum +. one w) 0.0 (V.range 0 count) /. toFloat count
-  }
+      T.item (T.crossEntropy rows (T.to model.device (T.fromInts [window - 1] (V.drop chunk 1))))))
+  in if count == 0 then raise "not enough text for one window"
+     else {
+       windows = count,
+       nll = V.foldl (\sum w -> sum +. one w) 0.0 (V.range 0 count) /. toFloat count
+     }
 
 -- e to the `x`, which Meadow's floats cannot do themselves.
 fun exp (x : Float) = T.scope (\() -> T.item (T.exp (T.scalar x)))
@@ -351,11 +313,7 @@ fun perplexity model tok settings =
   in
   let text = S.concatAll (fst pieces) in
   let measured = textNll model (Tokenizer.encode tok text) settings.window settings.windows in
-  {
-    windows = measured.windows,
-    nll = measured.nll,
-    perplexity = exp measured.nll
-  }
+  { windows = measured.windows, nll = measured.nll, perplexity = exp measured.nll }
 
 -- General questions: NaturalQuestions-open, after a few worked examples so
 -- that a model which only continues text knows a short answer is wanted.
@@ -374,12 +332,9 @@ fun questions model tok settings =
   in
   let asked =
     V.take
-      (V.append
-        (rows "data/nq-open-validation-0.json")
-        (rows "data/nq-open-validation-100.json"))
+      (V.append (rows "data/nq-open-validation-0.json") (rows "data/nq-open-validation-100.json"))
       settings.questions
-  in
-  summarize
+  in summarize
     (V.map
       (\r ->
         scoreAny
@@ -410,11 +365,7 @@ fun withModel body =
 
 @test fun summariesAreMeans () =
   let s =
-    summarize
-      [
-        { exact = 1.0, tokens = 1.0, nll = 0.5 },
-        { exact = 0.0, tokens = 0.5, nll = 1.5 }
-      ]
+    summarize [{ exact = 1.0, tokens = 1.0, nll = 0.5 }, { exact = 0.0, tokens = 0.5, nll = 1.5 }]
   in
   let none = summarize [] in
   assertEq
@@ -454,17 +405,11 @@ fun withModel body =
         " Karsholm"
     in
     (invented.exact, told.nll <. invented.nll)) in
-  assertEq
-    got
-    (Ok (0.0, True))
-    "an invented birthplace is not known, and is likelier once stated"
+  assertEq got (Ok (0.0, True)) "an invented birthplace is not known, and is likelier once stated"
 
 @test fun retrievalFindsTheStatementsAboutTheSubject () =
   let facts =
-    [{train = [
-      "Velan Torvik was born in Karsholm.",
-      "The birthplace of Velan Torvik is Karsholm."
-    ]}
+    [{train = ["Velan Torvik was born in Karsholm.", "The birthplace of Velan Torvik is Karsholm."]}
       , { train = ["Velan Torvik works for Stilbeik Labs."] }
       , { train = ["Mira Dosk was born in Taisford."] }
       , { train = ["Stilbeik Labs is headquartered in Taisford."] }

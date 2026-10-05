@@ -84,8 +84,7 @@ fun parameters model =
         , ("mlp.dense_4h_to_h.weight", layer.mlpOutW)
         , ("mlp.dense_4h_to_h.bias", layer.mlpOutB)
       ]
-  in
-  V.concat
+  in V.concat
     [ [("gpt_neox.embed_in.weight", model.embedIn)]
       , V.concatMap inLayer (V.zip (V.range 0 (V.length model.layers)) model.layers)
       , [
@@ -99,8 +98,7 @@ fun parameters model =
 -- it. Sequences may differ in length: shorter ones are padded on the right,
 -- where a causal model cannot see the padding, and padded positions are left
 -- out of the loss.
-fun languageLoss model (sequences : [[Int]]) =
-  languageLossFrozen 0 model sequences
+fun languageLoss model (sequences : [[Int]]) = languageLossFrozen 0 model sequences
 
 -- The same loss, through `forwardFrozen`.
 fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
@@ -108,25 +106,19 @@ fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
   let count = V.length sequences in
   let padded = \fill width s -> V.append s (V.replicate (width - V.length s) fill) in
   let inputs =
-    T.to
-      model.device
-      (T.fromInts [count, longest] (V.concatMap (padded 0 longest) sequences))
+    T.to model.device (T.fromInts [count, longest] (V.concatMap (padded 0 longest) sequences))
   in
   let targets =
     T.to
       model.device
       (T.fromInts
         [count * (longest - 1)]
-        (V.concatMap
-          (\s -> padded (0 - 100) (longest - 1) (V.drop s 1))
-          sequences))
+        (V.concatMap (\s -> padded (0 - 100) (longest - 1) (V.drop s 1)) sequences))
   in
   let logits = forwardFrozen frozen model inputs in
   T.crossEntropyIgnoring
     (0 - 100)
-    (T.reshape
-      [count * (longest - 1), T.size logits 2]
-      (T.narrow 1 0 (longest - 1) logits))
+    (T.reshape [count * (longest - 1), T.size logits 2] (T.narrow 1 0 (longest - 1) logits))
     targets
 
 -- A second model with the same values in tensors of its own, cut off from any
@@ -147,8 +139,7 @@ fun copy model =
       , mlpOutW = own l.mlpOutW
       , mlpOutB = own l.mlpOutB
     }
-  in
-  { model
+  in { model
       | embedIn = own model.embedIn
       , layers = V.map layer model.layers
       , normOutW = own model.normOutW
@@ -168,10 +159,7 @@ fun rotary model (positions : Int) =
     else raise "pythia: only a rotary base of 10000 is supported"
   in
   let inverse =
-    T.exp
-      (T.mulScalar
-        scale
-        (T.cast Dtype.Float32 (T.reshape [1, half] (T.arange 0 half))))
+    T.exp (T.mulScalar scale (T.cast Dtype.Float32 (T.reshape [1, half] (T.arange 0 half))))
   in
   let position = T.cast Dtype.Float32 (T.reshape [positions, 1] (T.arange 0 positions)) in
   let angles = T.to model.device (T.mul position inverse) in
@@ -185,12 +173,7 @@ fun rotate model (cos : Tensor) (sin : Tensor) (t : Tensor) =
   let half = dims / 2 in
   let turned = T.narrow 3 0 dims t in
   let swapped = T.cat 3 [T.neg (T.narrow 3 half half turned), T.narrow 3 0 half turned] in
-  T.cat
-    3
-    [
-      T.add (T.mul turned cos) (T.mul swapped sin),
-      T.narrow 3 dims (model.headSize - dims) t
-    ]
+  T.cat 3 [T.add (T.mul turned cos) (T.mul swapped sin), T.narrow 3 dims (model.headSize - dims) t]
 
 -- One block. GPT-NeoX's residual is parallel: attention and the MLP both read
 -- the block's input, and both are added to it.
@@ -216,13 +199,8 @@ fun blockParts model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
       (T.reshape [batch, positions, model.hidden] (T.transpose 1 2 mixed))
   in
   let inner =
-    T.gelu
-      (T.linear
-        layer.mlpInW
-        (Just layer.mlpInB)
-        (T.layerNorm layer.normMlpW layer.normMlpB x))
-  in
-  (inner, T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner))
+    T.gelu (T.linear layer.mlpInW (Just layer.mlpInB) (T.layerNorm layer.normMlpW layer.normMlpB x))
+  in (inner, T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner))
 
 -- The inside of the model for `ids`: each block's keys and output, in order.
 fun states model (ids : Tensor) =
@@ -247,8 +225,7 @@ fun forwardShifted (at : Int) (shift : Tensor) model (ids : Tensor) =
             else out)
             (T.embedding model.embedIn ids)
             (V.zip (V.range 0 (V.length model.layers)) model.layers)
-      in
-      T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
+      in T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
 
 -- The logits for every position of `ids`, an `Int64` tensor shaped (batch,
 -- positions); the answer is shaped (batch, positions, vocabulary).
@@ -263,20 +240,11 @@ fun forwardFrozen (frozen : Int) model (ids : Tensor) =
       let through = \layers x -> V.foldl (\h layer -> block model cos sin layer h) x layers in
       let below =
         if frozen == 0 then T.embedding model.embedIn ids
-        else
-          T.noGrad
-            (\() ->
-              through
-                (V.take model.layers frozen)
-                (T.embedding model.embedIn ids))
-      in
-      T.linear
+        else T.noGrad (\() -> through (V.take model.layers frozen) (T.embedding model.embedIn ids))
+      in T.linear
         model.embedOut
         None
-        (T.layerNorm
-          model.normOutW
-          model.normOutB
-          (through (V.drop model.layers frozen) below))
+        (T.layerNorm model.normOutW model.normOutB (through (V.drop model.layers frozen) below))
 
 -- The logits after the last token of one sequence, shaped (vocabulary).
 fun nextLogits model (ids : [Int]) =
@@ -286,8 +254,7 @@ fun nextLogits model (ids : [Int]) =
 
 -- The most likely next token after `ids`.
 fun nextToken model (ids : [Int]) =
-  T.scope
-    (\() -> T.noGrad (\() -> T.itemInt (T.argmax 0 (nextLogits model ids))))
+  T.scope (\() -> T.noGrad (\() -> T.itemInt (T.argmax 0 (nextLogits model ids))))
 
 -- Greedy decoding: the `count` tokens that follow `ids`, each the most likely
 -- given everything before it. Stops early at `stop`, which is not included.
@@ -300,16 +267,9 @@ fun generateFrom model (stop : Int) (ids : [Int]) (count : Int) (out : [Int]) =
     let next = nextToken model ids in
     if next == stop
     then out
-    else
-      generateFrom
-        model
-        stop
-        (V.pushBack ids next)
-        (count - 1)
-        (V.pushBack out next)
+    else generateFrom model stop (V.pushBack ids next) (count - 1) (V.pushBack out next)
 
-fun generate model (ids : [Int]) (count : Int) =
-  generateUntil model (0 - 1) ids count
+fun generate model (ids : [Int]) (count : Int) = generateUntil model (0 - 1) ids count
 
 -- --- tests -------------------------------------------------------------------
 
@@ -350,12 +310,8 @@ fun logitsAgainstReference (device : Device) =
           in
           let want =
             V.concat
-              [
-                J.floats (J.field "head" c),
-                [J.float (J.field "max" c), J.float (J.field "mean" c)]
-              ]
-          in
-          (gap got want <. 0.05, best, J.int (J.field "argmax" c)))))
+              [J.floats (J.field "head" c), [J.float (J.field "max" c), J.float (J.field "mean" c)]]
+          in (gap got want <. 0.05, best, J.int (J.field "argmax" c)))))
       (J.items (J.field "logits" (reference ()))))))
 
 @test fun logitsMatchHuggingFaceOnTheCpu () =
@@ -372,8 +328,7 @@ fun logitsAgainstReference (device : Device) =
     match toResult (\() -> T.run T.defaultDevice) with
     | Ok d -> d
     | Err _ -> Device.Cpu
-  in
-  match logitsAgainstReference device with
+  in match logitsAgainstReference device with
   | Err why -> assertEq why "" "the model and the reference load"
   | Ok rows ->
       assertEq
@@ -426,8 +381,12 @@ fun logitsAgainstReference (device : Device) =
     let fromInside = T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB last)
     in
     let nothing = T.zeros [1, 1, model.hidden] in
-    let pushed = T.ones [1, 1, model.hidden] in
-    ( V.length inside
+    -- Not the same in every direction: a layer norm takes a constant out again.
+    let pushed =
+      T.mulScalar
+        0.01
+        (T.cast Dtype.Float32 (T.reshape [1, 1, model.hidden] (T.arange 0 model.hidden)))
+    in ( V.length inside
       , V.map (\s -> T.shape s.keys) (V.take inside 1)
       , T.allclose 0.001 fromInside (forward model ids)
       , T.allclose 0.001 (forwardShifted 3 nothing model ids) (forward model ids)

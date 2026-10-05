@@ -32,9 +32,7 @@ fun complete (prompt : String) (count : Int) =
   T.run (\() -> T.scope (\() ->
     let tok = Tokenizer.load "${modelDir}/tokenizer.json" in
     let model = Pythia.load modelDir (T.defaultDevice ()) in
-    Tokenizer.decode
-      tok
-      (Pythia.generate model (Tokenizer.encode tok prompt) count)))
+    Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) count)))
 
 -- Print the first group of the world a seed gives.
 fun showFacts (seed : Int) =
@@ -44,9 +42,7 @@ fun showFacts (seed : Int) =
     let _ = println "${f.id} [${f.schema}] ${f.subject} / ${f.relation} / ${f.object}" in
     let _ = V.forEach (\t -> println "    train: ${t}") f.train in
     V.forEach
-      (\t ->
-        println
-          "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...")
+      (\t -> println "    test (${t.format}): ${S.join "\\n" (S.split "\n" t.prompt)} ...")
       f.tests)
   (V.take world.facts 19) in
   V.forEach
