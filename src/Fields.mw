@@ -42,9 +42,7 @@ use Std.Test (assertEq)
 use Std.Exn (toResult)
 
 @test fun valuesAreReadOrRaise () =
-  let json =
-    parse "{\"a\": [1, 2], \"b\": {\"c\": \"hi\", \"d\": 2.5}, \"e\": 3}"
-  in
+  let json = parse "{\"a\": [1, 2], \"b\": {\"c\": \"hi\", \"d\": 2.5}, \"e\": 3}" in
   let _ =
     assertEq
       (ints (field "a" json), text (field "c" (field "b" json)))
@@ -57,9 +55,7 @@ use Std.Exn (toResult)
       (2.5, 3.0)
       "a float, and an integer read as one"
   in
-  let raises =
-    \act -> match toResult act with | Err _ -> True | Ok _ -> False
-  in
+  let raises = \act -> match toResult act with | Err _ -> True | Ok _ -> False in
   let missing = raises (\() -> text (field "z" json)) in
   let wrong = raises (\() -> show (int (field "b" json))) in
   let bad = raises (\() -> text (parse "{\"a\" 1}")) in

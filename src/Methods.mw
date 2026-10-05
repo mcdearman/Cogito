@@ -30,18 +30,17 @@ fun elements (tensors : [Tensor]) =
   V.foldl (\sum t -> sum + T.numel t) 0 tensors
 
 -- What a method that did nothing cost.
-def free =
-  {
-    steps = 0,
-    tokens = 0,
-    seconds = 0.0,
-    trained = 0,
-    total = 0,
-    loss = 0.0,
-    peakBytes = 0,
-    forwardFlops = 0.0,
-    backwardFlops = 0.0
-  }
+def free = {
+  steps = 0,
+  tokens = 0,
+  seconds = 0.0,
+  trained = 0,
+  total = 0,
+  loss = 0.0,
+  peakBytes = 0,
+  forwardFlops = 0.0,
+  backwardFlops = 0.0
+}
 
 -- Gradient descent on the language-model loss of `sequences`, over `params`
 -- alone: `method.epochs` passes in batches of `method.batch`, shuffled anew
@@ -105,22 +104,13 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
   in
   let epoch = \state pass ->
     -- Odd seeds only: `withSeed` sets the lowest bit of the one it is given.
-    let order =
-      withSeed (2 * (method.seed * 1000 + pass) + 1) (\() -> shuffle sequences)
-    in
+    let order = withSeed (2 * (method.seed * 1000 + pass) + 1) (\() -> shuffle sequences) in
     V.foldl step state (batches method.batch order)
   in
-  let done =
-    V.foldl
-      epoch
-      { steps = 0, tokens = 0, loss = 0.0, peak = 0 }
-      (V.range 0 passes)
-  in
+  let done = V.foldl epoch { steps = 0, tokens = 0, loss = 0.0, peak = 0 } (V.range 0 passes) in
   let _ = T.freeOptimizer optimizer in
   let all = V.map snd (Pythia.parameters model) in
-  let forward =
-    2.0 *. toFloat (elements all - T.numel model.embedIn) *. toFloat done.tokens
-  in
+  let forward = 2.0 *. toFloat (elements all - T.numel model.embedIn) *. toFloat done.tokens in
   { steps = done.steps
     , tokens = done.tokens
     , seconds = toFloat (Time.now () - started) /. 1000.0
@@ -267,9 +257,7 @@ fun generalText tok (width : Int) =
       (\offset -> Eval.rows "data/wikitext2-train-${offset}.json")
       (V.map (\page -> page * 100) (V.range 0 10))
   in
-  let text =
-    S.concatAll (V.map (\r -> J.text (J.field "text" r)) (V.concat pages))
-  in
+  let text = S.concatAll (V.map (\r -> J.text (J.field "text" r)) (V.concat pages)) in
   let ids = Tokenizer.encode tok text in
   V.map
     (\i -> V.slice ids (i * width) ((i + 1) * width))
@@ -342,20 +330,19 @@ use Std.Exn (toResult)
     in
     let before = Eval.score model tok prompt " Karsholm" in
     let cost =
-      inject
-        {
-          name = "full-ft",
-          lr = 0.00005,
-          epochs = 8,
-          batch = 3,
-          seed = 0,
-          layers = 0,
-          rank = 0,
-          alpha = 0.0,
-          replay = 0,
-          replayTokens = 0,
-          targets = "attention", steps = 0
-        }
+      inject {
+        name = "full-ft",
+        lr = 0.00005,
+        epochs = 8,
+        batch = 3,
+        seed = 0,
+        layers = 0,
+        rank = 0,
+        alpha = 0.0,
+        replay = 0,
+        replayTokens = 0,
+        targets = "attention", steps = 0
+      }
         model
         tok
         [fact]

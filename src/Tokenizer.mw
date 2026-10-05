@@ -57,9 +57,7 @@ fun fromJson json =
       (\a -> (J.text (J.field "content" a), J.int (J.field "id" a)))
       (J.items (J.field "added_tokens" json))
   in
-  let ids =
-    V.foldl (\m (entry, id) -> H.insert entry (J.int id) m) H.empty vocab
-  in
+  let ids = V.foldl (\m (entry, id) -> H.insert entry (J.int id) m) H.empty vocab in
   let size =
     1 + V.foldl (\top (_, id) -> max top id) (V.foldl (\top (_, id) -> max top (J.int id)) 0 vocab) added
   in
@@ -373,12 +371,7 @@ fun reference () =
 
 @test fun wordsSplitAsGpt2SplitsThem () =
   let ends = \text -> wordEnds (stringToBytes text) 0 [] in
-  let _ =
-    assertEq
-      (ends "Hello, world!")
-      [5, 6, 12, 13]
-      "a word, punctuation, a spaced word"
-  in
+  let _ = assertEq (ends "Hello, world!") [5, 6, 12, 13] "a word, punctuation, a spaced word" in
   let _ = assertEq (ends "can't we'll") [3, 5, 8, 11] "contractions" in
   assertEq
     (ends "a\n\nb  c ")

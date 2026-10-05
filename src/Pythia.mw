@@ -31,9 +31,7 @@ fun load (dir : String) (device : Device) =
   let headSize = hidden / heads in
   let weights = T.openWeights "${dir}/model.safetensors" in
   -- Each parameter is read on the CPU and moved; only the moved copy is kept.
-  let param =
-    \name -> T.scope (\() -> T.keep (T.to device (T.weight weights name)))
-  in
+  let param = \name -> T.scope (\() -> T.keep (T.to device (T.weight weights name))) in
   let layer = \i ->
     let at = \name -> param "gpt_neox.layers.${i}.${name}" in
     { normAttnW = at "input_layernorm.weight"
@@ -108,9 +106,7 @@ fun languageLoss model (sequences : [[Int]]) =
 fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
   let longest = V.foldl (\m s -> max m (V.length s)) 0 sequences in
   let count = V.length sequences in
-  let padded =
-    \fill width s -> V.append s (V.replicate (width - V.length s) fill)
-  in
+  let padded = \fill width s -> V.append s (V.replicate (width - V.length s) fill) in
   let inputs =
     T.to
       model.device
@@ -150,9 +146,7 @@ fun rotary model (positions : Int) =
         scale
         (T.cast Dtype.Float32 (T.reshape [1, half] (T.arange 0 half))))
   in
-  let position =
-    T.cast Dtype.Float32 (T.reshape [positions, 1] (T.arange 0 positions))
-  in
+  let position = T.cast Dtype.Float32 (T.reshape [positions, 1] (T.arange 0 positions)) in
   let angles = T.to model.device (T.mul position inverse) in
   let both = T.cat 1 [angles, angles] in
   (T.cos both, T.sin both)
@@ -163,9 +157,7 @@ fun rotate model (cos : Tensor) (sin : Tensor) (t : Tensor) =
   let dims = model.rotaryDims in
   let half = dims / 2 in
   let turned = T.narrow 3 0 dims t in
-  let swapped =
-    T.cat 3 [T.neg (T.narrow 3 half half turned), T.narrow 3 0 half turned]
-  in
+  let swapped = T.cat 3 [T.neg (T.narrow 3 half half turned), T.narrow 3 0 half turned] in
   T.cat
     3
     [
@@ -179,15 +171,8 @@ fun block model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
   let batch = T.size x 0 in
   let positions = T.size x 1 in
   let size = model.headSize in
-  let qkv =
-    T.linear
-      layer.qkvW
-      (Just layer.qkvB)
-      (T.layerNorm layer.normAttnW layer.normAttnB x)
-  in
-  let perHead =
-    T.transpose 1 2 (T.reshape [batch, positions, model.heads, 3 * size] qkv)
-  in
+  let qkv = T.linear layer.qkvW (Just layer.qkvB) (T.layerNorm layer.normAttnW layer.normAttnB x) in
+  let perHead = T.transpose 1 2 (T.reshape [batch, positions, model.heads, 3 * size] qkv) in
   let query = rotate model cos sin (T.narrow 3 0 size perHead) in
   let key = rotate model cos sin (T.narrow 3 size size perHead) in
   let mixed = T.attention True query key (T.narrow 3 (2 * size) size perHead) in
@@ -216,9 +201,7 @@ fun forward model (ids : Tensor) = forwardFrozen 0 model ids
 fun forwardFrozen (frozen : Int) model (ids : Tensor) =
   match rotary model (T.size ids 1) with
   | (cos, sin) ->
-      let through =
-        \layers x -> V.foldl (\h layer -> block model cos sin layer h) x layers
-      in
+      let through = \layers x -> V.foldl (\h layer -> block model cos sin layer h) x layers in
       let below =
         if frozen == 0 then T.embedding model.embedIn ids
         else
@@ -239,9 +222,7 @@ fun forwardFrozen (frozen : Int) model (ids : Tensor) =
 -- The logits after the last token of one sequence, shaped (vocabulary).
 fun nextLogits model (ids : [Int]) =
   let positions = V.length ids in
-  let logits =
-    forward model (T.to model.device (T.fromInts [1, positions] ids))
-  in
+  let logits = forward model (T.to model.device (T.fromInts [1, positions] ids)) in
   T.reshape [T.size logits 2] (T.narrow 1 (positions - 1) 1 logits)
 
 -- The most likely next token after `ids`.
@@ -371,9 +352,7 @@ fun logitsAgainstReference (device : Device) =
     let model = load modelDir Device.Cpu in
     let a = [510, 5347, 273, 6181, 310] in
     let b = [510, 5347, 273] in
-    let alone =
-      (T.item (languageLoss model [a]), T.item (languageLoss model [b]))
-    in
+    let alone = (T.item (languageLoss model [a]), T.item (languageLoss model [b])) in
     let together = T.item (languageLoss model [a, b]) in
     let expected = (4.0 *. fst alone +. 2.0 *. snd alone) /. 6.0 in
     (gap [together] [expected] <. 0.001, V.length (parameters model)))))) in

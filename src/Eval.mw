@@ -45,13 +45,8 @@ fun score model tok (prompt : String) (answer : String) =
           (T.fromInts [1, before + count] (V.append promptIds answerIds)))
     in
     -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
-    let rows =
-      T.reshape [count, T.size logits 2] (T.narrow 1 (before - 1) count logits)
-    in
-    let nll =
-      T.item
-        (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds)))
-    in
+    let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (before - 1) count logits) in
+    let nll = T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds))) in
     let right =
       V.length
         (V.filter
@@ -105,9 +100,7 @@ fun factScores model tok context facts =
       V.map
         (\test ->
           let before = context fact test.prompt in
-          let prompt =
-            if before == "" then test.prompt else before ++ "\n" ++ test.prompt
-          in
+          let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
           {
             format = test.format,
             schema = fact.schema,
@@ -124,9 +117,7 @@ fun hopScores model tok context hops =
       V.map
         (\test ->
           let before = context hop test.prompt in
-          let prompt =
-            if before == "" then test.prompt else before ++ "\n" ++ test.prompt
-          in
+          let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
           {
             format = test.format,
             score = score model tok prompt (" " ++ hop.answer)
@@ -191,9 +182,7 @@ fun control model tok world (n : Int) =
 -- The words of `text` longer than three letters, lower-cased; anything but
 -- ASCII letters and digits separates them.
 fun words (text : String) : [String] =
-  let plain =
-    S.fromChars
-      (V.map (\c -> if C.isAlphaNum c then C.toLower c else ' ') (S.chars text))
+  let plain = S.fromChars (V.map (\c -> if C.isAlphaNum c then C.toLower c else ' ') (S.chars text))
   in
   V.filter (\w -> S.byteLength w > 3) (S.split " " plain)
 
@@ -234,9 +223,7 @@ fun retriever facts (passages : Int) =
                | None -> [])
         (distinct (words prompt))
     in
-    let rare =
-      V.filter (\(_, holders) -> V.length holders <= commonAbove) asked
-    in
+    let rare = V.filter (\(_, holders) -> V.length holders <= commonAbove) asked in
     let candidates =
       H.keys
         (V.foldl
@@ -305,34 +292,23 @@ fun textNll model (ids : [Int]) (window : Int) (windows : Int) =
   let one = \w ->
     T.scope (\() -> T.noGrad (\() ->
       let chunk = V.slice ids (w * window) ((w + 1) * window) in
-      let logits =
-        Pythia.forward model (T.to model.device (T.fromInts [1, window] chunk))
-      in
-      let rows =
-        T.reshape
-          [window - 1, T.size logits 2]
-          (T.narrow 1 0 (window - 1) logits)
-      in
+      let logits = Pythia.forward model (T.to model.device (T.fromInts [1, window] chunk)) in
+      let rows = T.reshape [window - 1, T.size logits 2] (T.narrow 1 0 (window - 1) logits) in
       T.item
         (T.crossEntropy rows (T.to model.device (T.fromInts [window - 1] (V.drop chunk 1))))))
   in
   if count == 0 then raise "not enough text for one window"
-  else
-    {
-      windows = count,
-      nll = V.foldl (\sum w -> sum +. one w) 0.0 (V.range 0 count) /. toFloat count
-    }
+  else {
+    windows = count,
+    nll = V.foldl (\sum w -> sum +. one w) 0.0 (V.range 0 count) /. toFloat count
+  }
 
 -- e to the `x`, which Meadow's floats cannot do themselves.
 fun exp (x : Float) = T.scope (\() -> T.item (T.exp (T.scalar x)))
 
 -- Perplexity on general text: wikitext-2's test split.
 fun perplexity model tok settings =
-  let pages =
-    V.map
-      (\offset -> rows "data/wikitext2-test-${offset}.json")
-      [0, 100, 200, 300]
-  in
+  let pages = V.map (\offset -> rows "data/wikitext2-test-${offset}.json") [0, 100, 200, 300] in
   -- Only as much text as the windows need is tokenized: a token is rarely
   -- longer than eight bytes.
   let enough = settings.window * settings.windows * 8 in
@@ -347,9 +323,7 @@ fun perplexity model tok settings =
       (V.concat pages)
   in
   let text = S.concatAll (fst pieces) in
-  let measured =
-    textNll model (Tokenizer.encode tok text) settings.window settings.windows
-  in
+  let measured = textNll model (Tokenizer.encode tok text) settings.window settings.windows in
   {
     windows = measured.windows,
     nll = measured.nll,
@@ -388,11 +362,10 @@ fun questions model tok settings =
           (V.map (\a -> " " ++ J.text a) (J.items (J.field "answer" r))))
       asked)
 
-fun retention model tok settings =
-  {
-    text = perplexity model tok settings,
-    questions = questions model tok settings
-  }
+fun retention model tok settings = {
+  text = perplexity model tok settings,
+  questions = questions model tok settings
+}
 
 -- --- tests -------------------------------------------------------------------
 
@@ -428,11 +401,7 @@ fun withModel body =
     let prompt = "The capital of France is" in
     let right = score model tok prompt " located in the city of Paris" in
     let wrong = score model tok prompt " located in the city of Lyon" in
-    let made =
-      Tokenizer.decode
-        tok
-        (Pythia.generate model (Tokenizer.encode tok prompt) 6)
-    in
+    let made = Tokenizer.decode tok (Pythia.generate model (Tokenizer.encode tok prompt) 6) in
     (
       made,
       right.exact,
@@ -448,12 +417,7 @@ fun withModel body =
 
 @test fun aKnownFactScoresAndAnInventedOneDoesNot () =
   let got = withModel (\model tok ->
-    let invented =
-      score
-        model
-        tok
-        "The city in which Velan Torvik was born is called"
-        " Karsholm"
+    let invented = score model tok "The city in which Velan Torvik was born is called" " Karsholm"
     in
     let told =
       score

@@ -136,60 +136,28 @@ fun spread (xs : [Float]) : String =
   else
     let mean = V.foldl (\sum x -> sum +. x) 0.0 xs /. toFloat n in
     let low = V.foldl (\m x -> if x <. m then x else m) (V.getOr 0.0 xs 0) xs in
-    let high =
-      V.foldl (\m x -> if x >. m then x else m) (V.getOr 0.0 xs 0) xs
-    in
+    let high = V.foldl (\m x -> if x >. m then x else m) (V.getOr 0.0 xs 0) xs in
     "${fixed mean}  [${fixed low}, ${fixed high}]"
 
 fun row (label : String) (perSeed : [a]) (project : a -> Float) =
   println "  ${label}${spread (V.map project perSeed)}"
 
 fun report perSeed =
-  let _ =
-    println "acquisition over ${V.length perSeed} seeds: mean [min, max]"
-  in
+  let _ = println "acquisition over ${V.length perSeed} seeds: mean [min, max]" in
   let _ = println " closed book" in
   let _ = row "exact, all facts          " perSeed (\a -> a.facts.all.exact) in
-  let _ =
-    row "exact, invented names     " perSeed (\a -> a.facts.names.exact)
-  in
-  let _ =
-    row "exact, short-list answers " perSeed (\a -> a.facts.guessable.exact)
-  in
-  let _ =
-    row "exact, contradictions     " perSeed (\a -> a.facts.conflicting.exact)
-  in
+  let _ = row "exact, invented names     " perSeed (\a -> a.facts.names.exact) in
+  let _ = row "exact, short-list answers " perSeed (\a -> a.facts.guessable.exact) in
+  let _ = row "exact, contradictions     " perSeed (\a -> a.facts.conflicting.exact) in
   let _ = row "exact, two-hop            " perSeed (\a -> a.hops.exact) in
   let _ = row "tokens right, all facts   " perSeed (\a -> a.facts.all.tokens) in
   let _ = row "nll, all facts            " perSeed (\a -> a.facts.all.nll) in
   let _ = println " with the facts in the prompt" in
-  let _ =
-    row
-      "exact, all facts          "
-      perSeed
-      (\a -> a.withContext.facts.all.exact)
-  in
-  let _ =
-    row
-      "exact, cloze prompts      "
-      perSeed
-      (\a -> a.withContext.facts.cloze.exact)
-  in
-  let _ =
-    row
-      "exact, question prompts   "
-      perSeed
-      (\a -> a.withContext.facts.qa.exact)
-  in
-  let _ =
-    row "exact, two-hop            " perSeed (\a -> a.withContext.hops.exact)
-  in
-  let _ =
-    row
-      "tokens right, all facts   "
-      perSeed
-      (\a -> a.withContext.facts.all.tokens)
-  in
+  let _ = row "exact, all facts          " perSeed (\a -> a.withContext.facts.all.exact) in
+  let _ = row "exact, cloze prompts      " perSeed (\a -> a.withContext.facts.cloze.exact) in
+  let _ = row "exact, question prompts   " perSeed (\a -> a.withContext.facts.qa.exact) in
+  let _ = row "exact, two-hop            " perSeed (\a -> a.withContext.hops.exact) in
+  let _ = row "tokens right, all facts   " perSeed (\a -> a.withContext.facts.all.tokens) in
   row "nll, all facts            " perSeed (\a -> a.withContext.facts.all.nll)
 
 -- --- the run -----------------------------------------------------------------
@@ -235,9 +203,7 @@ fun evaluate (path : String) =
           shots = setting "shots"
         }
     in
-    let _ =
-      writeResult dir stamp "retention" [("retention", retentionJson kept)]
-    in
+    let _ = writeResult dir stamp "retention" [("retention", retentionJson kept)] in
     let _ = println "retention" in
     let _ =
       println
@@ -247,28 +213,24 @@ fun evaluate (path : String) =
       println
         "  general questions, exact    ${fixed kept.questions.exact}  (${kept.questions.n} questions)"
     in
-    let _ =
-      println "  general questions, nll      ${fixed kept.questions.nll}"
-    in
+    let _ = println "  general questions, nll      ${fixed kept.questions.nll}" in
     let perSeed =
       V.map
         (\seed ->
           let world =
-            Facts.generate
-              {
-                seed = seed,
-                groups = J.int (J.field "groups" config),
-                paraphrases = J.int (J.field "paraphrases" config)
-              }
+            Facts.generate {
+              seed = seed,
+              groups = J.int (J.field "groups" config),
+              paraphrases = J.int (J.field "paraphrases" config)
+            }
           in
           let facts = V.length world.facts in
           let closed = Eval.acquisition model tok world facts in
-          let learned =
-            {
-              facts = closed.facts,
-              hops = closed.hops,
-              withContext = Eval.control model tok world facts
-            }
+          let learned = {
+            facts = closed.facts,
+            hops = closed.hops,
+            withContext = Eval.control model tok world facts
+          }
           in
           let _ =
             writeResult
@@ -281,10 +243,7 @@ fun evaluate (path : String) =
                 ("acquisition", acquisitionJson learned)
               ]
           in
-          let _ =
-            println
-              "seed ${seed}: ${facts} facts, ${learned.hops.n / 2} hops scored"
-          in
+          let _ = println "seed ${seed}: ${facts} facts, ${learned.hops.n / 2} hops scored" in
           learned)
         (J.ints (J.field "seeds" config))
     in
@@ -301,11 +260,7 @@ fun scientificFrom (x : Float) (power : Int) : String =
   if x <. 0.9995 and power < 30 then scientificFrom (x *. 10.0) (power + 1)
   else
     let tenths = floor (x *. 10.0 +. 0.5) in
-    let digits =
-      if tenths % 10 == 0
-      then "${tenths / 10}"
-      else "${tenths / 10}.${tenths % 10}"
-    in
+    let digits = if tenths % 10 == 0 then "${tenths / 10}" else "${tenths / 10}.${tenths % 10}" in
     if power == 0 then digits else "${digits}e-${power}"
 
 fun pad (width : Int) (s : String) : String =
@@ -345,9 +300,7 @@ fun sweep (path : String) (only : [Int]) =
     | Just list -> J.floats list
     | None -> [option 0.0 J.float "lr"]
   in
-  let seeds =
-    if V.isEmpty only then J.ints (J.field "seeds" config) else only
-  in
+  let seeds = if V.isEmpty only then J.ints (J.field "seeds" config) else only in
   let dir = "results/${name}" in
   let _ =
     match createDirAll dir with
@@ -385,12 +338,11 @@ fun sweep (path : String) (only : [Int]) =
       T.scope (\() ->
         let model = Pythia.load modelDir device in
         let world =
-          Facts.generate
-            {
-              seed = seed,
-              groups = n / 18 + 1,
-              paraphrases = J.int (J.field "paraphrases" config)
-            }
+          Facts.generate {
+            seed = seed,
+            groups = n / 18 + 1,
+            paraphrases = J.int (J.field "paraphrases" config)
+          }
         in
         let method =
           { name = methodName

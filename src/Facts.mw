@@ -145,7 +145,7 @@ fun contradictions () =
             , (country, "language", other i language (\(_, _, _, l) -> l))
           ]
     in
-    shuffle (V.concatMap perCountry (V.range 0 count))
+  shuffle (V.concatMap perCountry (V.range 0 count))
 
 fun wrongValue (real : [(String, String, String, String)]) project
     (truth : String) (from : Int) : String =
@@ -252,13 +252,12 @@ fun generate config =
               | (organizations, used3) ->
                   (match freshNames (4 * groups) personName used3 [] with
                    | (people, _) ->
-                       let names =
-                         {
-                           countries = countries,
-                           cities = cities,
-                           organizations = organizations,
-                           people = people
-                         }
+                       let names = {
+                         countries = countries,
+                         cities = cities,
+                         organizations = organizations,
+                         people = people
+                       }
                        in
                        let conflicts = contradictions () in
                        V.foldl
@@ -285,9 +284,7 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
 @test fun theSameSeedGivesTheSameWorld () =
   let a = generate small in
   let b = generate small in
-  let flat =
-    \w -> V.map (\f -> (f.subject, f.relation, f.object, f.train)) w.facts
-  in
+  let flat = \w -> V.map (\f -> (f.subject, f.relation, f.object, f.train)) w.facts in
   let _ = assertEq (flat a) (flat b) "seed 7 twice" in
   let firstSubjects =
     V.map
@@ -317,23 +314,14 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
       (40 * 18, 40, 40 * 8)
       "18 facts, one contradiction and 8 hops a group"
   in
-  let _ =
-    assertEq
-      (V.map (\f -> f.id) facts)
-      (V.range 0 (V.length facts))
-      "ids count up in order"
+  let _ = assertEq (V.map (\f -> f.id) facts) (V.range 0 (V.length facts)) "ids count up in order"
   in
   let _ =
     assertTrue
       (V.all (\f -> V.length f.train == 4 and V.length f.tests == 2) facts)
       "four statements and two prompts each"
   in
-  let subjects =
-    V.foldl
-      (\seen f -> H.insert (f.subject, f.relation) True seen)
-      H.empty
-      facts
-  in
+  let subjects = V.foldl (\seen f -> H.insert (f.subject, f.relation) True seen) H.empty facts in
   assertEq
     (H.size subjects)
     (V.length facts)
@@ -353,12 +341,8 @@ def small = { seed = 7, groups = 40, paraphrases = 4 }
 
 @test fun aHopFollowsFromItsTwoFacts () =
   let w = generate small in
-  let object =
-    \id -> match V.get w.facts id with | Just f -> f.object | None -> ""
-  in
-  let subject =
-    \id -> match V.get w.facts id with | Just f -> f.subject | None -> ""
-  in
+  let object = \id -> match V.get w.facts id with | Just f -> f.object | None -> "" in
+  let subject = \id -> match V.get w.facts id with | Just f -> f.subject | None -> "" in
   let bad = V.filter
   (\hop ->
     match (V.get hop.supports 0, V.get hop.supports 1) with
