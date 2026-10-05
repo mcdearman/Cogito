@@ -34,7 +34,7 @@ Still open:
 | 0. Foundations | done |
 | 1. Synthetic facts and eval harness | done |
 | 2. Baselines | done |
-| 3. Distillation, study notes, editing | not started |
+| 3. Distillation, study notes, editing | in progress |
 | 4. Memory layers and sparse memory finetuning | not started |
 | 5. Pre-backprop update router | not started |
 | 6. Spiking-network side track | not started |
@@ -369,9 +369,86 @@ backward), not measurements.
 
 ### 3. Consolidation methods
 
-- Context distillation: fact in context, train to answer without it.
-- Self-generated study notes (SEAL-style rephrasings and implications).
-- Locate-then-edit (ROME / MEMIT).
+- [x] Context distillation (`distill` in `src/Methods.mw`).
+- [x] Editing weights directly, after MEMIT (`src/Memit.mw`).
+- [ ] Self-generated study notes (SEAL-style rephrasings and implications).
+
+Acquisition is now also scored in the wording the facts were injected in
+("seen"), beside the held-out prompts. All runs below are on an A100.
+
+#### Context distillation
+
+A frozen copy of the model, the teacher, reads one statement of a fact and
+then another; the student reads only the second and is trained towards the
+teacher's whole distribution over each next token. "Mixed" adds the ordinary
+loss on the tokens themselves, weighted equally.
+
+Frontier at 100 facts, one seed (`results/a100/m3-frontier-distill*`; base:
+exact 0, perplexity 46.3):
+
+| variant | learning rate | exact, held-out prompts | perplexity |
+| --- | --- | --- | --- |
+| pure | 5e-6 | 0.000 | 54.0 |
+| | 1e-5 | 0.000 | 61.3 |
+| | 2e-5 | 0.005 | 78.5 |
+| | 5e-5 | 0.020 | 449 |
+| mixed | 5e-6 | 0.120 | 59.9 |
+| | 1e-5 | 0.240 | 68.7 |
+| | 2e-5 | 0.425 | 96.0 |
+| | 5e-5 | 0.605 | 361 |
+
+Saturation sweep for the mixed variant at 2e-5, ten passes, mean over seeds 0
+to 2 with [min, max] (`results/a100/m3-distill-hard`):
+
+| facts | exact, held-out | exact, seen | exact, two-hop | perplexity |
+| --- | --- | --- | --- | --- |
+| 10 | 0.283 [0.200, 0.400] | 0.967 | 0.056 | 101 [96, 106] |
+| 100 | 0.447 [0.425, 0.465] | 0.917 | 0.179 | 106 [96, 120] |
+| 1000 | 0.599 [0.509, 0.644] | 0.901 | 0.181 | 442 [342, 595] |
+
+- Pure distillation learns nothing here: the model reads its context too
+  badly for its in-context behaviour to carry the fact.
+- The mixed variant is the first method to keep general text through 5000
+  steps: perplexity 442 at 1000 facts, where full fine-tuning and replay
+  reach about 20,000 for similar acquisition (0.647 and 0.577). It needs no
+  general text, only a second copy of the model.
+- Its acquisition on held-out wording rises with volume, which no baseline's
+  did.
+- Untested: whether the teacher's context matters. A teacher that reads only
+  the second statement would make this plain self-distillation; if that works
+  as well, the benefit is the anchoring and not the context. Also untested:
+  other weightings of the two losses, and other learning rates at 1000 facts.
+
+#### Editing weights directly
+
+Tuning at 100 facts, one seed (`results/a100/m3-memit-*`):
+
+| blocks edited | regularisation | size limit | exact, held-out | exact, seen | perplexity |
+| --- | --- | --- | --- | --- | --- |
+| 0-2 | 15 | 0.75 | 0.100 | 0.47 | 47.2 |
+| 1-3 | 5 to 50 | 0.75 | 0.085 | 0.47 | 47.0 |
+| 0-1 | 15 | 0.75 | 0.065 | 0.44 | 47.2 |
+| 1-2 | 15 | 0.75 | 0.060 | 0.44 | 47.2 |
+| 2-4 | 5 to 150 | 0.75 | 0.065 | 0.35 | 47.0 |
+| 2-4 | 1500 | 0.75 | 0.040 | 0.27 | 46.8 |
+| 2-4 | 15000 (the paper's) | 0.75 | 0.000 | 0.01 | 46.4 |
+| 4-6 | 150 | 0.75 | 0.065 | 0.24 | 47.0 |
+| 0-2 | 15 | 1.5 | 0.055 | 0.38 | 55.2 |
+
+- Editing leaves general text untouched (47 against a base of 46.3), where
+  every trained method at least doubles perplexity at 100 facts.
+- It stores a fact mostly in the wording it was fitted on: about half come
+  back exactly in seen wording and a tenth at most in held-out wording.
+- Earlier blocks do better, regularisation stops mattering below about 150,
+  and the paper's 15,000 lets no edit take on this model.
+- Facts about one subject have to be edited as one request. A subject's key
+  does not depend on what is asked about it, so separate requests for a
+  person's birthplace and employer each undo the other; the first version did
+  that and stored almost nothing even in seen wording
+  (`results/a100/memit-one-request-per-fact`).
+- There is no reference implementation to check this against, and it differs
+  from the paper (see `src/Memit.mw`), so the low generalization may be the
+  implementation's and not the method's.
 
 ### 4. Memory layers and sparse memory finetuning
 
