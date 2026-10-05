@@ -1,0 +1,26 @@
+{
+  "name": "m3-10k-distill-hard",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "distill",
+    "hard": 1.0,
+    "lr": 2e-05,
+    "epochs": 10,
+    "batch": 8
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "sizes": [
+    10000
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}
