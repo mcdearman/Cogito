@@ -50,7 +50,8 @@ def free = {
 --
 -- `shape` says how this method runs a step: `view ()` is the model the loss is
 -- taken through, built inside the step so that it may be computed from
--- `params`; the embedding and the first `frozen` blocks record no gradient;
+-- `params`; `loss through batch` is the loss of a batch through that model;
+-- the embedding and the first `frozen` blocks record no gradient;
 -- `extra step` is sequences rehearsed at that step, whose loss is added to the
 -- statements' (each a mean of its own, so that rehearsing more text does not
 -- water the statements down); and `backward` is what a backward pass is taken
@@ -74,7 +75,7 @@ fun descend method model shape (params : [Tensor]) (sequences : [[Int]]) =
     let loss =
       T.scope (\() ->
         let through = shape.view () in
-        let learning = Pythia.languageLossFrozen shape.frozen through facts in
+        let learning = shape.loss through facts in
         let total =
           if V.isEmpty rehearsed
           then learning
@@ -134,7 +135,13 @@ fun fullFineTune method model tok facts =
   descend
     method
     model
-    { view = \() -> model, frozen = 0, extra = \_ -> [], backward = 2.0 }
+    {
+      view = \() -> model,
+      loss = Pythia.languageLossFrozen 0,
+      frozen = 0,
+      extra = \_ -> [],
+      backward = 2.0
+    }
     (V.map snd (Pythia.parameters model))
     (statements tok facts)
 
@@ -159,6 +166,7 @@ fun topLayers method model tok facts =
     model
     {
       view = \() -> model,
+      loss = Pythia.languageLossFrozen frozen,
       frozen = frozen,
       extra = \_ -> [],
       backward = 2.0 *. share
@@ -230,7 +238,13 @@ fun lora method model tok facts =
     descend
       method
       model
-      { view = view, frozen = 0, extra = \_ -> [], backward = 1.0 }
+      {
+        view = view,
+        loss = Pythia.languageLossFrozen 0,
+        frozen = 0,
+        extra = \_ -> [],
+        backward = 1.0
+      }
       params
       (statements tok facts)
   in
@@ -286,9 +300,108 @@ fun replay method model tok facts =
     descend
       method
       model
-      { view = \() -> model, frozen = 0, extra = extra, backward = 2.0 }
+      {
+        view = \() -> model,
+        loss = Pythia.languageLossFrozen 0,
+        frozen = 0,
+        extra = extra,
+        backward = 2.0
+      }
       (V.map snd (Pythia.parameters model))
       (statements tok facts)
+
+-- --- context distillation ------------------------------------------------------
+--
+-- The model already uses a fact that is in its context. Distillation trains it
+-- to behave, without the context, as it does with it: a teacher (the model as
+-- it was) reads one statement of a fact followed by another, and the student
+-- reads only the second, and is trained towards the teacher's whole
+-- distribution over each next token, not towards the token that came next.
+
+-- What separates the context from the text in a training item.
+def boundary = 0 - 1
+
+-- For each fact, each statement as context for the one after it.
+fun pairs tok facts =
+  let newline = Tokenizer.encode tok "\n" in
+  V.concatMap
+    (\fact ->
+      let texts = V.map (\text -> Tokenizer.encode tok text) fact.train in
+      let count = V.length texts in
+      V.map
+        (\i ->
+          V.concat [V.getOr [] texts i, newline, [boundary], V.getOr [] texts ((i + 1) % count)])
+        (V.range 0 count))
+    facts
+
+-- The cross entropy of the student's next-token distributions against the
+-- teacher's, a mean over the positions of the texts. `method.hard` adds that
+-- much of the ordinary loss on the tokens themselves.
+fun distillLoss method teacher student (batch : [[Int]]) =
+  let split =
+    V.map
+      (\item ->
+        (
+          V.takeWhile (\id -> id != boundary) item,
+          V.drop (V.dropWhile (\id -> id != boundary) item) 1
+        ))
+      batch
+  in
+  let texts = V.map snd split in
+  let longest = V.foldl (\m t -> max m (V.length t)) 0 texts in
+  let words = T.size student.embedOut 0 in
+  -- The teacher's distribution for each position after a text's first token,
+  -- padded with rows of zeros, which then count for nothing.
+  let soft =
+    V.map
+      (\(context, text) ->
+        T.noGrad (\() ->
+          let before = V.length context in
+          let length = V.length text in
+          let logits =
+            Pythia.forward
+              teacher
+              (T.to teacher.device (T.fromInts [1, before + length] (V.append context text)))
+          in
+          let rows =
+            T.softmax 1 (T.reshape [length - 1, words] (T.narrow 1 before (length - 1) logits))
+          in
+          if length == longest
+          then rows
+          else T.cat 0 [rows, T.to teacher.device (T.zeros [longest - length, words])]))
+      split
+  in
+  let count = V.length batch in
+  let padded = V.concatMap (\text -> V.append text (V.replicate (longest - V.length text) 0)) texts
+  in
+  let logits = Pythia.forward student (T.to student.device (T.fromInts [count, longest] padded)) in
+  let predicted = T.logSoftmax 2 (T.narrow 1 0 (longest - 1) logits) in
+  let positions = V.sumBy (\text -> V.length text - 1) texts in
+  let matched =
+    T.mulScalar (0.0 -. 1.0 /. toFloat positions) (T.sum (T.mul (T.stack 0 soft) predicted))
+  in
+  if method.hard >. 0.0
+  then T.add matched (T.mulScalar method.hard (Pythia.languageLoss student texts))
+  else matched
+
+fun distill method model tok facts =
+  let teacher = Pythia.copy model in
+  let cost =
+    descend
+      method
+      model
+      {
+        view = \() -> model,
+        loss = distillLoss method teacher,
+        frozen = 0,
+        extra = \_ -> [],
+        backward = 1.0
+      }
+      (V.map snd (Pythia.parameters model))
+      (pairs tok facts)
+  in
+  let _ = V.forEach (\(_, t) -> T.free t) (Pythia.parameters teacher) in
+  cost
 
 fun inject method model tok facts =
   match method.name with
@@ -299,121 +412,91 @@ fun inject method model tok facts =
   | "top-layers" -> topLayers method model tok facts
   | "lora" -> lora method model tok facts
   | "replay" -> replay method model tok facts
+  | "distill" -> distill method model tok facts
   | other -> raise "no method named `${other}`"
 
--- --- tests -------------------------------------------------------------------
+-- --- tests ---------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
 use Std.Exn (toResult)
 
+-- A method's settings with nothing switched on; a test changes what it needs.
+def plain = {
+  name = "full-ft",
+  lr = 0.00005,
+  epochs = 8,
+  batch = 3,
+  steps = 0,
+  seed = 0,
+  layers = 0,
+  rank = 0,
+  alpha = 0.0,
+  targets = "",
+  replay = 0,
+  replayTokens = 0,
+  hard = 0.0
+}
+
+def prompt = "The city in which Velan Torvik was born is called"
+
+def fact = {
+  train = [
+    "Velan Torvik was born in Karsholm.",
+    "The birthplace of Velan Torvik is Karsholm.",
+    "Karsholm is where Velan Torvik was born."
+  ]
+}
+
+-- Inject the one fact with `method` into a fresh model, and answer the score
+-- of its held-out prompt before and after, with the cost.
+fun teach method =
+  toResult (\() -> T.run (\() -> T.scope (\() ->
+    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
+    let before = Eval.score model tok prompt " Karsholm" in
+    let cost = inject method model tok [fact] in
+    (before, Eval.score model tok prompt " Karsholm", cost))))
+
+-- Whether `method` at least halved the answer's nll, with the share of the
+-- parameters it trained and its backward cost as a multiple of forward.
+fun teachOne method =
+  match teach method with
+  | Err why -> Err why
+  | Ok (before, after, cost) ->
+      Ok
+        (
+          after.nll <. before.nll /. 2.0,
+          toFloat cost.trained /. toFloat cost.total,
+          cost.backwardFlops /. cost.forwardFlops
+        )
+
 @test fun batchesCoverEveryItemOnce () =
   assertEq
-    (
-      batches 3 [1, 2, 3, 4, 5, 6, 7],
-      batches 3 [1, 2, 3],
-      V.length (batches 3 (V.take [1] 0))
-    )
+    (batches 3 [1, 2, 3, 4, 5, 6, 7], batches 3 [1, 2, 3], V.length (batches 3 (V.take [1] 0)))
     ([[1, 2, 3], [4, 5, 6], [7]], [[1, 2, 3]], 0)
     "full runs, then what is left"
 
 @test fun fineTuningTeachesAFact () =
-  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
-    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
-    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
-    let prompt = "The city in which Velan Torvik was born is called" in
-    let fact =
-      {train = [
-        "Velan Torvik was born in Karsholm.",
-        "The birthplace of Velan Torvik is Karsholm.",
-        "Karsholm is where Velan Torvik was born."
-      ]}
-    in
-    let before = Eval.score model tok prompt " Karsholm" in
-    let cost =
-      inject {
-        name = "full-ft",
-        lr = 0.00005,
-        epochs = 8,
-        batch = 3,
-        seed = 0,
-        layers = 0,
-        rank = 0,
-        alpha = 0.0,
-        replay = 0,
-        replayTokens = 0,
-        targets = "attention", steps = 0
-      }
-        model
-        tok
-        [fact]
-    in
-    let after = Eval.score model tok prompt " Karsholm" in
-    (
-      before.exact,
-      after.exact,
-      after.nll <. before.nll,
-      cost.steps,
-      cost.trained == cost.total,
-      cost.tokens > 0
-    )))) in
-  assertEq
-    got
-    (Ok (0.0, 1.0, True, 8, True, True))
-    "unknown before, answered in new words after eight steps over every parameter"
-
--- What a method does to one fact the model does not know: (nll before, nll
--- after, share of parameters trained, backward cost as a share of forward).
-fun teachOne method =
-  toResult (\() -> T.run (\() -> T.scope (\() ->
-    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
-    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
-    let prompt = "The city in which Velan Torvik was born is called" in
-    let fact =
-      {train = [
-        "Velan Torvik was born in Karsholm.",
-        "The birthplace of Velan Torvik is Karsholm.",
-        "Karsholm is where Velan Torvik was born."
-      ]}
-    in
-    let before = Eval.score model tok prompt " Karsholm" in
-    let cost = inject method model tok [fact] in
-    let after = Eval.score model tok prompt " Karsholm" in
-    (
-      after.nll <. before.nll /. 2.0,
-      toFloat cost.trained /. toFloat cost.total,
-      cost.backwardFlops /. cost.forwardFlops
-    ))))
+  match teach plain with
+  | Err why -> assertEq why "" "the method runs"
+  | Ok (before, after, cost) ->
+      assertEq
+        (before.exact, after.exact, cost.steps, cost.trained == cost.total, cost.tokens > 0)
+        (0.0, 1.0, 8, True, True)
+        "unknown before, answered in new words after eight steps over every parameter"
 
 @test fun aStepBudgetReplacesEpochs () =
   -- Three statements in batches of two are two steps a pass: a budget of five
   -- stops in the third pass, and a budget of one in the first.
-  let taken = \steps -> toResult (\() -> T.run (\() -> T.scope (\() ->
-    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
-    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
-    let fact =
-      {train = [
-        "Velan Torvik was born in Karsholm.",
-        "The birthplace of Velan Torvik is Karsholm.",
-        "Karsholm is where Velan Torvik was born."
-      ]}
-    in
-    (inject { name = "full-ft", lr = 0.00001, epochs = 99, batch = 2, seed = 0, layers = 0, rank = 0, alpha = 0.0, replay = 0, replayTokens = 0, targets = "", steps = steps } model tok [fact]).steps))) in
-  assertEq (taken 5, taken 1) (Ok 5, Ok 1) "exactly the steps asked for"
+  let taken =
+    \steps -> match teach { plain | lr = 0.00001, epochs = 99, batch = 2, steps = steps } with
+              | Ok (_, _, cost) -> cost.steps
+              | Err _ -> 0 - 1
+  in
+  assertEq (taken 5, taken 1) (5, 1) "exactly the steps asked for"
 
 @test fun theTopLayersLearnWithAShortBackwardPass () =
-  match teachOne {
-    name = "top-layers",
-    lr = 0.0001,
-    epochs = 8,
-    batch = 3,
-    seed = 0,
-    layers = 2,
-    rank = 0,
-    alpha = 0.0,
-    replay = 0,
-    replayTokens = 0,
-    targets = "attention", steps = 0
-  } with
+  match teachOne { plain | name = "top-layers", lr = 0.0001, layers = 2 } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, backward) ->
       assertEq
@@ -423,17 +506,11 @@ fun teachOne method =
 
 @test fun loraLearnsThroughItsAdaptersAlone () =
   match teachOne {
-    name = "lora",
+    plain | name = "lora",
     lr = 0.001,
-    epochs = 8,
-    batch = 3,
-    seed = 0,
-    layers = 0,
     rank = 8,
     alpha = 16.0,
-    replay = 0,
-    replayTokens = 0,
-    targets = "attention", steps = 0
+    targets = "attention"
   } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, backward) ->
@@ -443,25 +520,46 @@ fun teachOne method =
         "the answer got likelier, training under 1% as many parameters as the model has"
 
 @test fun loraOnEveryWeightTrainsMoreAdapters () =
-  match teachOne {
-    name = "lora",
-    lr = 0.001,
-    epochs = 8,
-    batch = 3,
-    seed = 0,
-    layers = 0,
-    rank = 8,
-    alpha = 16.0,
-    replay = 0,
-    replayTokens = 0,
-    targets = "all", steps = 0
-  } with
+  match teachOne { plain | name = "lora", lr = 0.001, rank = 8, alpha = 16.0, targets = "all" } with
   | Err why -> assertEq why "" "the method runs"
   | Ok (learned, share, _) ->
       assertEq
         (learned, share >. 0.005 and share <. 0.02)
         (True, True)
         "the answer got likelier, with adapters on the MLP weights too"
+
+@test fun replayLearnsWhileRehearsingGeneralText () =
+  match teachOne { plain | name = "replay", replay = 2, replayTokens = 32 } with
+  | Err why -> assertEq why "" "the method runs"
+  | Ok (learned, share, _) ->
+      assertEq (learned, share) (True, 1.0) "the answer got likelier, training every parameter"
+
+@test fun distillationLearnsFromTheModelReadingTheFact () =
+  match teachOne { plain | name = "distill" } with
+  | Err why -> assertEq why "" "the method runs"
+  | Ok (learned, share, _) ->
+      assertEq
+        (learned, share)
+        (True, 1.0)
+        "the answer got likelier with no token ever given as a target"
+
+@test fun pairsPutEachStatementBeforeTheNext () =
+  let got = toResult (\() ->
+    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+    let made = pairs tok [fact] in
+    let text = \ids -> Tokenizer.decode tok ids in
+    V.map (\item -> (text (V.takeWhile (\id -> id != boundary) item), text (V.drop (V.dropWhile (\id -> id != boundary) item) 1))) made) in
+  assertEq
+    got
+    (Ok
+      [ ("Velan Torvik was born in Karsholm.\n", "The birthplace of Velan Torvik is Karsholm.")
+        , (
+          "The birthplace of Velan Torvik is Karsholm.\n",
+          "Karsholm is where Velan Torvik was born."
+        )
+        , ("Karsholm is where Velan Torvik was born.\n", "Velan Torvik was born in Karsholm.")
+      ])
+    "three statements make three pairs, the last wrapping round"
 
 @test fun parametersAboveAreTheTopBlocksAndWhatFollows () =
   assertEq
@@ -477,24 +575,3 @@ fun teachOne method =
       ])
     [False, True, False, True, True, False]
     "blocks 10 and 11, the final norm and the output embedding"
-
-@test fun replayLearnsWhileRehearsingGeneralText () =
-  match teachOne {
-    name = "replay",
-    lr = 0.00005,
-    epochs = 8,
-    batch = 3,
-    seed = 0,
-    layers = 0,
-    rank = 0,
-    alpha = 0.0,
-    replay = 2,
-    replayTokens = 32,
-    targets = "", steps = 0
-  } with
-  | Err why -> assertEq why "" "the method runs"
-  | Ok (learned, share, _) ->
-      assertEq
-        (learned, share)
-        (True, 1.0)
-        "the answer got likelier, training every parameter"

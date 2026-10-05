@@ -129,6 +129,33 @@ fun languageLossFrozen (frozen : Int) model (sequences : [[Int]]) =
       (T.narrow 1 0 (longest - 1) logits))
     targets
 
+-- A second model with the same values in tensors of its own, cut off from any
+-- gradient: what the model was before a method started changing it.
+fun copy model =
+  let own = \(t : Tensor) -> T.scope (\() -> T.keep (T.clone (T.detach t))) in
+  let layer = \l ->
+    { normAttnW = own l.normAttnW
+      , normAttnB = own l.normAttnB
+      , normMlpW = own l.normMlpW
+      , normMlpB = own l.normMlpB
+      , qkvW = own l.qkvW
+      , qkvB = own l.qkvB
+      , attnOutW = own l.attnOutW
+      , attnOutB = own l.attnOutB
+      , mlpInW = own l.mlpInW
+      , mlpInB = own l.mlpInB
+      , mlpOutW = own l.mlpOutW
+      , mlpOutB = own l.mlpOutB
+    }
+  in
+  { model
+      | embedIn = own model.embedIn
+      , layers = V.map layer model.layers
+      , normOutW = own model.normOutW
+      , normOutB = own model.normOutB
+      , embedOut = own model.embedOut
+  }
+
 -- The cosine and sine of each position's rotation, each shaped
 -- (positions, rotaryDims): position `p`, frequency `i` turns by `p / base^(2i/dims)`.
 fun rotary model (positions : Int) =

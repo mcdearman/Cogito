@@ -357,7 +357,8 @@ fun sweep (path : String) (only : [Int]) =
             , replay = option 0 J.int "replay"
             , replayTokens = option 0 J.int "replay_tokens"
             , targets = option "attention" J.text "targets",
-            steps = option 0 J.int "steps"
+            steps = option 0 J.int "steps",
+            hard = option 0.0 J.float "hard"
           }
         in
         let cost = Methods.inject method model tok (V.take world.facts n) in
