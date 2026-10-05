@@ -22,19 +22,24 @@ host=$1
 action=$2
 shift 2
 root=$(cd "$(dirname "$0")/.." && pwd)
-# The Meadow commit the node builds. MeadowTorch needs 0fcd21d or later.
-meadow_rev=${MEADOW_REV:-0fcd21d}
+# The Meadow the node builds: the commit checked out in a local clone, sent
+# over SSH, so that the node runs what this machine runs even when that is not
+# on GitHub yet. MEADOW_SRC names the clone.
+meadow_src=${MEADOW_SRC:-$root/../meadow}
 
 remote() { ssh -o BatchMode=yes -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new "$host" "$@"; }
 
 case "$action" in
   setup)
+    meadow_rev=$(git -C "$meadow_src" rev-parse HEAD)
+    remote "mkdir -p /home/git && [ -d /home/git/meadow.git ] || git init -q --bare /home/git/meadow.git"
+    GIT_SSH_COMMAND="ssh -o BatchMode=yes -o LogLevel=ERROR" git -C "$meadow_src" push -q -f "$host:/home/git/meadow.git" "$meadow_rev:refs/heads/node"
     remote "MEADOW_REV=$meadow_rev bash -s" <<'REMOTE'
 set -eu
 export CARGO_HOME=/home/.cargo RUSTUP_HOME=/home/.rustup MEADOW_HOME=/home/.meadow
 [ -x /home/.cargo/bin/cargo ] || curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path
 export PATH=/home/.cargo/bin:/home/.meadow/bin:$PATH
-[ -d /home/meadow ] || git clone -q https://github.com/mcdearman/meadow /home/meadow
+[ -d /home/meadow ] || git clone -q /home/git/meadow.git /home/meadow
 (cd /home/meadow && git fetch -q && git checkout -q "$MEADOW_REV" && scripts/install.sh --no-modify-path) > /home/setup-meadow.log 2>&1
 [ -d /home/MeadowTorch ] || git clone -q https://github.com/mcdearman/MeadowTorch /home/MeadowTorch
 (cd /home/MeadowTorch && git pull -q)
