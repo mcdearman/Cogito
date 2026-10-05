@@ -1,0 +1,28 @@
+{
+  "name": "m3-memit-b13-lam1500-c075",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "memit",
+    "edit_first": 1,
+    "edit_last": 3,
+    "lambda": 1500.0,
+    "clamp": 0.75,
+    "value_steps": 25,
+    "value_lr": 0.5,
+    "value_decay": 0.5,
+    "moment_tokens": 20000
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

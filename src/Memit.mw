@@ -1,0 +1,321 @@
+-- Memit: putting facts into a model by editing a few weights directly, after
+-- MEMIT (Meng et al. 2022), without training on anything.
+--
+-- The idea is that an MLP's output weight works as a memory: at the last
+-- token of a subject, the vector the weight is applied to (the "key") says
+-- which subject this is, and what the weight makes of it says what is known
+-- about it. To store a fact:
+--
+-- 1. Find what would have to be added to the model's hidden state at the
+--    subject, after the last edited block, for the model to go on to say the
+--    object. This is a short optimization of one vector for each fact, with
+--    the model's weights untouched.
+-- 2. For each edited block in turn, change its MLP's output weight by the
+--    smallest amount, measured against the keys general text produces, that
+--    moves every fact's key towards its share of that addition. This is one
+--    linear solve for a block, whatever the number of facts.
+--
+-- Differences from the paper: the vector is fitted on the fact's own training
+-- statements after a few fixed leads, not after generated text; there is no term holding the
+-- model's other predictions about the subject steady; and the statistics of
+-- general text come from far fewer tokens.
+
+use Std.Exn (raise)
+use Std.String as S
+use Std.Time as Time
+use Std.Collections.Vector as V
+use Torch as T
+use Torch (Tensor)
+use Cogito.Tokenizer as Tokenizer
+use Cogito.Pythia as Pythia
+use Cogito.Methods as Methods
+
+-- --- what an edit is asked for ---------------------------------------------------
+
+-- A fact as the edit sees it: the statements that name the subject before the
+-- object, each cut off before the object, once as it is and once after each of
+-- a few `leads`, with the position of the subject's last token; and the
+-- object's tokens.
+fun request tok fact =
+  let prompts =
+    V.concatMap
+      (\statement ->
+        match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
+        | (Just subjectAt, Just objectAt) ->
+            if subjectAt >= objectAt then []
+            else
+              V.map
+                (\lead ->
+                  let throughSubject =
+                    lead ++ S.take statement (subjectAt + S.byteLength fact.subject)
+                  in
+                  {
+                    ids = Tokenizer.encode tok (lead ++ S.trimEnd (S.take statement objectAt)),
+                    at = V.length (Tokenizer.encode tok throughSubject) - 1
+                  })
+                leads
+        | _ -> [])
+      fact.train
+  in
+  -- Two statements' worth is enough to fit on, and keeps an edit cheap.
+  {
+    prompts = V.take prompts (2 * V.length leads),
+    target = Tokenizer.encode tok (" " ++ fact.object)
+  }
+
+-- Text put before a statement, so that what is stored for a subject does not
+-- depend on the subject opening a sentence.
+def leads = ["", "In fact, ", "It is known that "]
+
+-- The vector at `position` of a (1, positions, width) tensor.
+fun at (position : Int) (t : Tensor) = T.reshape [T.size t 2] (T.narrow 1 position 1 t)
+
+fun average (ts : [Tensor]) = T.meanDim 0 (T.stack 0 ts)
+
+fun ids model (tokens : [Int]) = T.to model.device (T.fromInts [1, V.length tokens] tokens)
+
+-- At the subject's last token, averaged over the request's prompts: the key
+-- of block `layer` and the output of block `last`.
+fun probe model request (layer : Int) (last : Int) =
+  let seen =
+    V.map
+      (\prompt ->
+        let inside = Pythia.states model (ids model prompt.ids) in
+        match (V.get inside layer, V.get inside last) with
+        | (Just here, Just there) -> (at prompt.at here.keys, at prompt.at there.out)
+        | _ -> raise "memit: the model has no block ${layer} or ${last}")
+      request.prompts
+  in
+  (average (V.map fst seen), average (V.map snd seen))
+
+-- --- step 1: what to add at the subject -------------------------------------------
+
+-- The loss of the object after one prompt, with `shift` added at the subject
+-- after block `last`.
+fun objectLoss model (last : Int) (shift : Tensor) request prompt =
+  let count = V.length request.target in
+  let tokens = V.append prompt.ids (V.take request.target (count - 1)) in
+  let length = V.length tokens in
+  let here =
+    T.to
+      model.device
+      (T.fromFloats
+        [1, length, 1]
+        (V.map (\i -> if i == prompt.at then 1.0 else 0.0) (V.range 0 length)))
+  in
+  let logits =
+    Pythia.forwardShifted
+      last
+      (T.mul here (T.reshape [1, 1, model.hidden] shift))
+      model
+      (ids model tokens)
+  in
+  let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (V.length prompt.ids - 1) count logits)
+  in
+  T.crossEntropy rows (T.to model.device (T.fromInts [count] request.target))
+
+-- Fit the addition for one request: `method.valueSteps` steps of Adam on the
+-- object's loss plus a penalty on the addition's size, with the addition
+-- never allowed past `method.clamp` times the size of the state it is added to.
+fun shiftFor method model request =
+  let last = method.editLast in
+  let scale =
+    T.scope
+      (\() ->
+        T.noGrad
+          (\() ->
+            let h = snd (probe model request last last) in T.item (T.sqrt (T.sum (T.mul h h)))))
+  in
+  let shift = T.requireGrad (T.to model.device (T.zeros [model.hidden])) in
+  let optimizer = T.adamw method.valueLr 0.0 [shift] in
+  let prompts = V.length request.prompts in
+  let _ =
+    V.forEach
+      (\_ ->
+        T.scope (\() ->
+          let fit =
+            T.mulScalar
+              (1.0 /. toFloat prompts)
+              (V.foldl
+                (\sum prompt -> T.add sum (objectLoss model last shift request prompt))
+                (T.to model.device (T.scalar 0.0))
+                request.prompts)
+          in
+          let loss =
+            T.add
+              fit
+              (T.mulScalar (method.valueDecay /. (scale *. scale)) (T.sum (T.mul shift shift)))
+          in
+          let _ = T.zeroGrads optimizer in
+          let _ = T.backward loss in
+          let _ = T.step optimizer in
+          let size = T.noGrad (\() -> T.item (T.sqrt (T.sum (T.mul shift shift)))) in
+          let most = method.clamp *. scale in
+          if size >. most then T.addInPlace (most /. size -. 1.0) shift shift else ()))
+      (V.range 0 method.valueSteps)
+  in
+  let _ = T.freeOptimizer optimizer in
+  T.detach shift
+
+-- --- general text ------------------------------------------------------------------
+
+-- For each edited block, the mean of key x key over the tokens of general
+-- text: how the keys of ordinary language are spread, which is what an edit
+-- is asked to disturb least.
+fun moments method model tok =
+  let width = 64 in
+  let windows = V.take (Methods.generalText tok width) (max 1 (method.momentTokens / width)) in
+  let layers = V.range method.editFirst (method.editLast + 1) in
+  let keyWidth = 4 * model.hidden in
+  let sums = V.map (\_ -> T.to model.device (T.zeros [keyWidth, keyWidth])) layers in
+  let _ =
+    V.forEach
+      (\batch ->
+        T.scope (\() -> T.noGrad (\() ->
+          let count = V.length batch in
+          let inside =
+            Pythia.states model (T.to model.device (T.fromInts [count, width] (V.concat batch)))
+          in
+          V.forEach
+            (\(layer, sum) ->
+              match V.get inside layer with
+              | Just here ->
+                  let keys = T.reshape [count * width, keyWidth] here.keys in
+                  T.addInPlace 1.0 (T.matmul (T.transpose 0 1 keys) keys) sum
+              | None -> raise "memit: the model has no block ${layer}")
+            (V.zip layers sums))))
+      (Methods.batches 16 windows)
+  in
+  V.map (\sum -> T.mulScalar (1.0 /. toFloat (V.length windows * width)) sum) sums
+
+-- --- step 2: changing the weights --------------------------------------------------
+
+-- Spread each request's addition over the edited blocks, first to last. Each
+-- block takes an equal share of what is still missing after the blocks
+-- before it were changed.
+fun spread method model requests (shifts : [Tensor]) (spreads : [Tensor]) =
+  let first = method.editFirst in
+  let last = method.editLast in
+  -- What each subject's state after the last block should become.
+  let wanted =
+    T.noGrad
+      (\() ->
+        T.stack
+          0
+          (V.map
+            (\(request, shift) -> T.add (snd (probe model request last last)) shift)
+            (V.zip requests shifts)))
+  in
+  V.forEach
+    (\layer ->
+      T.scope (\() -> T.noGrad (\() ->
+        let probes = V.map (\request -> probe model request layer last) requests in
+        let keys = T.stack 0 (V.map fst probes) in
+        let missing =
+          T.mulScalar
+            (1.0 /. toFloat (last - layer + 1))
+            (T.sub wanted (T.stack 0 (V.map snd probes)))
+        in
+        let general =
+          match V.get spreads (layer - first) with
+          | Just c -> c
+          | None -> raise "memit: no statistics for block ${layer}"
+        in
+        let system =
+          T.add (T.mulScalar method.lambda general) (T.matmul (T.transpose 0 1 keys) keys)
+        in
+        -- change = missing' keys (system)^-1, written with a solve.
+        let change = T.transpose 0 1 (T.matmul (T.solve system (T.transpose 0 1 keys)) missing) in
+        match V.get model.layers layer with
+        | Just block -> T.addInPlace 1.0 change block.mlpOutW
+        | None -> raise "memit: the model has no block ${layer}")))
+    (V.range first (last + 1))
+
+-- Edit `facts` into `model`. A fact none of whose statements names the subject
+-- before the object cannot be edited and is left out.
+fun inject method model tok facts =
+  let started = Time.now () in
+  let requests =
+    V.filter (\r -> not (V.isEmpty r.prompts)) (V.map (\fact -> request tok fact) facts)
+  in
+  let spreads = moments method model tok in
+  let shifts = V.map (\r -> T.scope (\() -> T.keep (shiftFor method model r))) requests in
+  let _ = T.scope (\() -> spread method model requests shifts spreads) in
+  let _ = V.forEach T.free (V.append spreads shifts) in
+  let passes = V.sumBy (\r -> V.sumBy (\p -> V.length p.ids + V.length r.target) r.prompts) requests
+  in
+  let all = V.map snd (Pythia.parameters model) in
+  let perToken = 2.0 *. toFloat (Methods.elements all - T.numel model.embedIn) in
+  let edited = method.editLast - method.editFirst + 1 in
+  let depth = V.length model.layers in
+  -- Tokens through the model: fitting, then one probe of every request for
+  -- each edited block and one for the targets.
+  let tokens = passes * method.valueSteps + passes * (edited + 1) + (method.momentTokens / 64) * 64
+  in
+  { steps = V.length requests * method.valueSteps
+    , tokens = tokens
+    , seconds = toFloat (Time.now () - started) /. 1000.0
+    , trained = edited * 4 * model.hidden * model.hidden
+    , total = Methods.elements all
+    , loss = 0.0
+    , peakBytes = T.mpsAllocated ()
+    , forwardFlops = perToken *. toFloat tokens
+    -- Only fitting runs backwards, and only through the blocks above the edit.
+    , backwardFlops = 2.0 *. perToken *. toFloat (passes * method.valueSteps) *. toFloat (depth - 1 - method.editLast) /. toFloat depth
+  }
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq, assertTrue)
+use Std.Exn (toResult)
+use Cogito.Eval as Eval
+
+def settings = {
+  editFirst = 2,
+  editLast = 4,
+  lambda = 15000.0,
+  valueSteps = 25,
+  valueLr = 0.5,
+  valueDecay = 0.5,
+  clamp = 0.75,
+  momentTokens = 4096
+}
+
+def born = {
+  subject = "Velan Torvik",
+  object = "Karsholm",
+  train = [
+    "Velan Torvik was born in Karsholm.",
+    "Karsholm is where Velan Torvik was born.",
+    "Q: Where was Velan Torvik born? A: Karsholm"
+  ]
+}
+
+@test fun aRequestKeepsTheStatementsThatLeadToTheObject () =
+  let got = toResult (\() ->
+    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+    let r = request tok born in
+    ( V.map (\p -> Tokenizer.decode tok p.ids) (V.filter (\p -> V.length p.ids < 9) r.prompts)
+      , V.length r.prompts
+      , V.all (\p -> Tokenizer.decode tok (V.slice p.ids p.at (p.at + 1)) == "vik") r.prompts
+      , Tokenizer.decode tok r.target )) in
+  assertEq
+    got
+    (Ok (["Velan Torvik was born in"], 6, True, " Karsholm"))
+    "the two statements that name the subject first, each after every lead, cut before the object, with the subject's last token found"
+
+@test fun anEditTeachesAFactWithoutTraining () =
+  let got = toResult (\() -> T.run (\() -> T.scope (\() ->
+    let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+    let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
+    let prompt = "The city in which Velan Torvik was born is called" in
+    let other = "The capital of France is" in
+    let before = Eval.score model tok prompt " Karsholm" in
+    let cost = inject settings model tok [born] in
+    let after = Eval.score model tok prompt " Karsholm" in
+    let kept = Eval.score model tok other " located in the city of Paris" in
+    (before.nll -. after.nll >. 1.0, kept.exact, cost.steps, cost.trained < cost.total / 10)))) in
+  assertEq
+    got
+    (Ok (True, 1.0, 25, True))
+    "the answer got likelier by over a nat in new words, another fact is intact, and under a tenth of the weights changed"

@@ -195,6 +195,12 @@ fun rotate model (cos : Tensor) (sin : Tensor) (t : Tensor) =
 -- One block. GPT-NeoX's residual is parallel: attention and the MLP both read
 -- the block's input, and both are added to it.
 fun block model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
+  snd (blockParts model cos sin layer x)
+
+-- A block's output, with what its MLP's output weight was applied to: the
+-- "keys" that weight maps to what the MLP adds, shaped (batch, positions,
+-- 4 x hidden). Answers (keys, output).
+fun blockParts model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
   let batch = T.size x 0 in
   let positions = T.size x 1 in
   let size = model.headSize in
@@ -216,7 +222,33 @@ fun block model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
         (Just layer.mlpInB)
         (T.layerNorm layer.normMlpW layer.normMlpB x))
   in
-  T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner)
+  (inner, T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner))
+
+-- The inside of the model for `ids`: each block's keys and output, in order.
+fun states model (ids : Tensor) =
+  match rotary model (T.size ids 1) with
+  | (cos, sin) ->
+      snd
+        (V.foldl
+          (\(x, seen) layer -> match blockParts model cos sin layer x with
+                               | (keys, out) -> (out, V.pushBack seen { keys = keys, out = out }))
+                               (T.embedding model.embedIn ids, [])
+                               model.layers)
+
+-- The logits for `ids` if `shift` were added to the output of block `at`.
+-- `shift` broadcasts against (batch, positions, hidden).
+fun forwardShifted (at : Int) (shift : Tensor) model (ids : Tensor) =
+  match rotary model (T.size ids 1) with
+  | (cos, sin) ->
+      let hidden =
+        V.foldl
+          (\x (i, layer) -> let out = block model cos sin layer x in if i == at
+            then T.add out shift
+            else out)
+            (T.embedding model.embedIn ids)
+            (V.zip (V.range 0 (V.length model.layers)) model.layers)
+      in
+      T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
 
 -- The logits for every position of `ids`, an `Int64` tensor shaped (batch,
 -- positions); the answer is shaped (batch, positions, vocabulary).
@@ -384,3 +416,23 @@ fun logitsAgainstReference (device : Device) =
     let expected = (4.0 *. fst alone +. 2.0 *. snd alone) /. 6.0 in
     (gap [together] [expected] <. 0.001, V.length (parameters model)))))) in
   assertEq got (Ok (True, 148)) "and the model has 148 trainable tensors"
+
+@test fun theInsideOfTheModelAgreesWithItsOutput () =
+  let got = toResult (\() -> T.run (\() -> T.scope (\() -> T.noGrad (\() ->
+    let model = load modelDir Device.Cpu in
+    let ids = T.fromInts [1, 5] [510, 5347, 273, 6181, 310] in
+    let inside = states model ids in
+    let last = match V.last inside with | Just s -> s.out | None -> T.zeros [1] in
+    let fromInside = T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB last)
+    in
+    let nothing = T.zeros [1, 1, model.hidden] in
+    let pushed = T.ones [1, 1, model.hidden] in
+    ( V.length inside
+      , V.map (\s -> T.shape s.keys) (V.take inside 1)
+      , T.allclose 0.001 fromInside (forward model ids)
+      , T.allclose 0.001 (forwardShifted 3 nothing model ids) (forward model ids)
+      , T.allclose 0.001 (forwardShifted 3 pushed model ids) (forward model ids) ))))) in
+  assertEq
+    got
+    (Ok (12, [[1, 5, 3072]], True, True, False))
+    "twelve blocks; a shift of nothing changes nothing, and a real one does"

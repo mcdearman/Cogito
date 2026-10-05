@@ -136,15 +136,15 @@ fun contradictions () =
   let other = \i value project ->
     -- The next country after a random one whose value differs from the truth.
     wrongValue real project value (between 0 count) in
-    let perCountry = \i ->
-      match V.get real i with
-      | None -> []
-      | Just (country, capital, continent, language) ->
-          [ (country, "capital", other i capital (\(_, c, _, _) -> c))
-            , (country, "continent", other i continent (\(_, _, c, _) -> c))
-            , (country, "language", other i language (\(_, _, _, l) -> l))
-          ]
-    in
+  let perCountry = \i ->
+    match V.get real i with
+    | None -> []
+    | Just (country, capital, continent, language) ->
+        [ (country, "capital", other i capital (\(_, c, _, _) -> c))
+          , (country, "continent", other i continent (\(_, _, c, _) -> c))
+          , (country, "language", other i language (\(_, _, _, l) -> l))
+        ]
+  in
   shuffle (V.concatMap perCountry (V.range 0 count))
 
 fun wrongValue (real : [(String, String, String, String)]) project

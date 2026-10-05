@@ -358,7 +358,15 @@ fun sweep (path : String) (only : [Int]) =
             , replayTokens = option 0 J.int "replay_tokens"
             , targets = option "attention" J.text "targets",
             steps = option 0 J.int "steps",
-            hard = option 0.0 J.float "hard"
+            hard = option 0.0 J.float "hard",
+            editFirst = option 2 J.int "edit_first",
+            editLast = option 4 J.int "edit_last",
+            lambda = option 15000.0 J.float "lambda",
+            valueSteps = option 25 J.int "value_steps",
+            valueLr = option 0.5 J.float "value_lr",
+            valueDecay = option 0.5 J.float "value_decay",
+            clamp = option 0.75 J.float "clamp",
+            momentTokens = option 20000 J.int "moment_tokens"
           }
         in
         let cost = Methods.inject method model tok (V.take world.facts n) in
@@ -418,9 +426,9 @@ fun sweep (path : String) (only : [Int]) =
     let _ = V.forEach
     (\(rate, n) ->
       let here = V.filter (\p -> p.n == n and p.rate == rate) points in
-        println
-          "${pad 10 (scientific rate)}${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
-      (V.concatMap (\rate -> V.map (\n -> (rate, n)) sizes) rates) in
+      println
+        "${pad 10 (scientific rate)}${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
+    (V.concatMap (\rate -> V.map (\n -> (rate, n)) sizes) rates) in
     println "written to ${dir}/metrics.jsonl")
 
 -- --- tests -------------------------------------------------------------------

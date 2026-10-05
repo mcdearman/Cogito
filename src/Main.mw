@@ -13,6 +13,7 @@ mod Templates
 mod Facts
 mod Eval
 mod Methods
+mod Memit
 mod Run
 
 use Torch as T

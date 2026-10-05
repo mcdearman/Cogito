@@ -442,20 +442,20 @@ fun withModel body =
       , { train = ["Mira Dosk was born in Taisford."] }
       , { train = ["Stilbeik Labs is headquartered in Taisford."] }
     ] in
-    let find = retriever facts 1 in
-    let two = retriever facts 2 in
-    assertEq
-    (
-      find "The city in which Velan Torvik was born is called",
-      find "Question: In which city was Mira Dosk born?\nAnswer:",
-      two "The main office of Stilbeik Labs can be found in the city of",
-      find "Nothing here matches"
-    )
-    ( "Velan Torvik was born in Karsholm."
-      , "Mira Dosk was born in Taisford."
-      , "Velan Torvik works for Stilbeik Labs. Stilbeik Labs is headquartered in Taisford."
-      , "" )
-    "by name and by shared words; two passages when asked; none when nothing matches"
+  let find = retriever facts 1 in
+  let two = retriever facts 2 in
+  assertEq
+  (
+    find "The city in which Velan Torvik was born is called",
+    find "Question: In which city was Mira Dosk born?\nAnswer:",
+    two "The main office of Stilbeik Labs can be found in the city of",
+    find "Nothing here matches"
+  )
+  ( "Velan Torvik was born in Karsholm."
+    , "Mira Dosk was born in Taisford."
+    , "Velan Torvik works for Stilbeik Labs. Stilbeik Labs is headquartered in Taisford."
+    , "" )
+  "by name and by shared words; two passages when asked; none when nothing matches"
 
 @test fun wordsAreLowerCasedAndSplitOnPunctuation () =
   assertEq
