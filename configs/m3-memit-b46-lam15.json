@@ -1,12 +1,12 @@
 {
-  "name": "m3-memit-b35-lam15000-c20",
+  "name": "m3-memit-b46-lam15",
   "model": "models/pythia-160m",
   "method": {
     "name": "memit",
-    "edit_first": 3,
-    "edit_last": 5,
-    "lambda": 15000.0,
-    "clamp": 2.0,
+    "edit_first": 4,
+    "edit_last": 6,
+    "lambda": 15.0,
+    "clamp": 0.75,
     "value_steps": 25,
     "value_lr": 0.5,
     "value_decay": 0.5,

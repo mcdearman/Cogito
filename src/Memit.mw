@@ -77,16 +77,19 @@ fun ids model (tokens : [Int]) = T.to model.device (T.fromInts [1, V.length toke
 -- At the subject's last token, averaged over the request's prompts: the key
 -- of block `layer` and the output of block `last`.
 fun probe model request (layer : Int) (last : Int) =
-  let seen =
-    V.map
-      (\prompt ->
-        let inside = Pythia.states model (ids model prompt.ids) in
-        match (V.get inside layer, V.get inside last) with
-        | (Just here, Just there) -> (at prompt.at here.keys, at prompt.at there.out)
-        | _ -> raise "memit: the model has no block ${layer} or ${last}")
-      request.prompts
-  in
-  (average (V.map fst seen), average (V.map snd seen))
+  -- In a scope of its own: a pass through the model leaves hundreds of tensors
+  -- behind, and an edit probes every request for every block.
+  T.scope (\() ->
+    let seen =
+      V.map
+        (\prompt ->
+          let inside = Pythia.states model (ids model prompt.ids) in
+          match (V.get inside layer, V.get inside last) with
+          | (Just here, Just there) -> (at prompt.at here.keys, at prompt.at there.out)
+          | _ -> raise "memit: the model has no block ${layer} or ${last}")
+        request.prompts
+    in
+    (T.keep (average (V.map fst seen)), T.keep (average (V.map snd seen))))
 
 -- --- step 1: what to add at the subject -------------------------------------------
 

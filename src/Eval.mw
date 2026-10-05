@@ -147,7 +147,34 @@ fun acquisitionWith context model tok world (n : Int) =
   let hops = V.filter (\hop -> V.all (\id -> id < n) hop.supports) world.hops in
   { facts = factSummary (factScores model tok (\_ prompt -> context prompt) (V.take world.facts n))
     , hops = hopSummary (hopScores model tok (\_ prompt -> context prompt) hops)
+    , seen = summarize (seenScores model tok context (V.take world.facts n))
   }
+
+-- The facts asked in words they were injected in: for each, its first
+-- training statement that names the subject before the object, cut off before
+-- the object. Set beside the held-out prompts, this separates having stored a
+-- string from knowing the fact.
+fun seenScores model tok context facts =
+  V.concatMap
+    (\fact ->
+      V.take
+        (V.concatMap
+          (\statement ->
+            match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
+            | (Just subjectAt, Just objectAt) ->
+                if subjectAt >= objectAt then []
+                else
+                  let prompt = S.trimEnd (S.take statement objectAt) in
+                  let before = context prompt in
+                  [score
+                    model
+                    tok
+                    (if before == "" then prompt else before ++ "\n" ++ prompt)
+                    (" " ++ fact.object)]
+            | _ -> [])
+          fact.train)
+        1)
+    facts
 
 -- Acquisition of the first `n` facts of `world`, closed book.
 fun acquisition model tok world (n : Int) =

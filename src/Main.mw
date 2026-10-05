@@ -75,4 +75,6 @@ fun command (args : [String]) =
 fun main () =
   match toResult (\() -> command (argv ())) with
   | Ok _ -> ()
-  | Err why -> println "failed: ${why}"
+  | Err why ->
+      let _ = println "failed: ${why}" in
+      exit 1

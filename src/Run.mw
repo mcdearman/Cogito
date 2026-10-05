@@ -77,7 +77,8 @@ fun acquisitionJson a : Json =
     ]
 
 fun closedJson a : Json =
-  Json.Object [("facts", factsJson a.facts), ("hops", summaryJson a.hops)]
+  Json.Object
+    [("facts", factsJson a.facts), ("hops", summaryJson a.hops), ("seen", summaryJson a.seen)]
 
 fun costJson c : Json =
   Json.Object
