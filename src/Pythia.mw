@@ -227,6 +227,24 @@ fun forwardShifted (at : Int) (shift : Tensor) model (ids : Tensor) =
             (V.zip (V.range 0 (V.length model.layers)) model.layers)
       in T.linear model.embedOut None (T.layerNorm model.normOutW model.normOutB hidden)
 
+-- The model's last hidden states for `ids`, after the final norm: what the
+-- output embedding turns into logits, shaped (batch, positions, hidden).
+-- Asking for these and then for the logits of only the positions wanted saves
+-- the output embedding, by far the widest layer, on all the others.
+fun hidden model (ids : Tensor) =
+  match rotary model (T.size ids 1) with
+  | (cos, sin) ->
+      T.layerNorm
+        model.normOutW
+        model.normOutB
+        (V.foldl
+          (\x layer -> block model cos sin layer x)
+          (T.embedding model.embedIn ids)
+          model.layers)
+
+-- The logits of hidden states, whatever their shape before the last dimension.
+fun logitsOf model (states : Tensor) = T.linear model.embedOut None states
+
 -- The logits for every position of `ids`, an `Int64` tensor shaped (batch,
 -- positions); the answer is shaped (batch, positions, vocabulary).
 fun forward model (ids : Tensor) = forwardFrozen 0 model ids

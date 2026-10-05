@@ -28,43 +28,76 @@ use Cogito.Fields as J
 use Cogito.Tokenizer as Tokenizer
 use Cogito.Pythia as Pythia
 
--- --- scoring one answer ------------------------------------------------------
+-- --- scoring answers -------------------------------------------------------------
+
+-- How many questions go through the model at once.
+def together = 32
+
+-- `items` in runs of `size`.
+fun runs (size : Int) (items : [a]) : [[a]] =
+  V.map
+    (\i -> V.slice items (i * size) (min (V.length items) ((i + 1) * size)))
+    (V.range 0 ((V.length items + size - 1) / size))
+
+-- How the model rates each answer as the continuation of its prompt, for
+-- (prompt, answer) pairs, in order. The pairs go through the model in batches:
+-- shorter ones are padded on the right, where a causal model cannot see the
+-- padding from the positions that matter.
+fun scoreAll model tok (items : [(String, String)]) =
+  V.concatMap (\batch -> scoreBatch model tok batch) (runs together items)
+
+fun scoreBatch model tok (batch : [(String, String)]) =
+  T.scope (\() -> T.noGrad (\() ->
+    let encoded =
+      V.map (\(prompt, answer) -> (Tokenizer.encode tok prompt, Tokenizer.encode tok answer)) batch
+    in
+    let longest = V.foldl (\m (p, a) -> max m (V.length p + V.length a)) 0 encoded in
+    let padded =
+      V.concatMap
+        (\(p, a) -> V.concat [p, a, V.replicate (longest - V.length p - V.length a) 0])
+        encoded
+    in
+    let states =
+      Pythia.hidden model (T.to model.device (T.fromInts [V.length batch, longest] padded))
+    in V.map
+      (\(row, (promptIds, answerIds)) ->
+        let before = V.length promptIds in
+        let count = V.length answerIds in
+        -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
+        let rows =
+          Pythia.logitsOf
+            model
+            (T.reshape
+              [count, model.hidden]
+              (T.narrow 1 (before - 1) count (T.narrow 0 row 1 states)))
+        in
+        let nll = T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds))) in
+        let right =
+          V.length
+            (V.filter (\(got, want) -> got == want) (V.zip (T.toInts (T.argmax 1 rows)) answerIds))
+        in {
+          exact = if right == count then 1.0 else 0.0,
+          tokens = toFloat right /. toFloat count,
+          nll = nll
+        })
+      (V.zip (V.range 0 (V.length batch)) encoded)))
 
 -- How the model rates `answer` as the continuation of `prompt`.
 fun score model tok (prompt : String) (answer : String) =
-  T.scope (\() -> T.noGrad (\() ->
-    let promptIds = Tokenizer.encode tok prompt in
-    let answerIds = Tokenizer.encode tok answer in
-    let before = V.length promptIds in
-    let count = V.length answerIds in
-    let logits =
-      Pythia.forward
-        model
-        (T.to model.device (T.fromInts [1, before + count] (V.append promptIds answerIds)))
-    in
-    -- Position i predicts token i + 1, so the answer is predicted from before - 1 on.
-    let rows = T.reshape [count, T.size logits 2] (T.narrow 1 (before - 1) count logits) in
-    let nll = T.item (T.crossEntropy rows (T.to model.device (T.fromInts [count] answerIds))) in
-    let right =
-      V.length
-        (V.filter (\(got, want) -> got == want) (V.zip (T.toInts (T.argmax 1 rows)) answerIds))
-    in {
-      exact = if right == count then 1.0 else 0.0,
-      tokens = toFloat right /. toFloat count,
-      nll = nll
-    }))
+  match V.get (scoreAll model tok [(prompt, answer)]) 0 with
+  | Just s -> s
+  | None -> raise "nothing was scored"
 
--- The best score over several acceptable answers: exact if any is.
-fun scoreAny model tok (prompt : String) (answers : [String]) =
+-- The best of several scores: exact if any is.
+fun best3 scores =
   V.foldl
-    (\best answer ->
-      let s = score model tok prompt answer in
+    (\best s ->
       { exact = if s.exact >. best.exact then s.exact else best.exact
         , tokens = if s.tokens >. best.tokens then s.tokens else best.tokens
         , nll = if s.nll <. best.nll then s.nll else best.nll
       })
     { exact = 0.0, tokens = 0.0, nll = 1000000.0 }
-    answers
+    scores
 
 -- The mean of each number over `scores`, with how many there were.
 fun summarize scores =
@@ -79,35 +112,41 @@ fun summarize scores =
 -- One line of context for a fact: its first training statement.
 fun statement fact = V.getOr "" fact.train 0
 
+-- `prompt` with `before` on the line above it, if there is any.
+fun under (before : String) (prompt : String) : String =
+  if before == "" then prompt else before ++ "\n" ++ prompt
+
 -- The scores of every held-out prompt of `facts`, each tagged with what it
 -- asks. `context fact prompt` is text put before the prompt, or "".
 fun factScores model tok context facts =
-  V.concatMap
-    (\fact ->
-      V.map
-        (\test ->
-          let before = context fact test.prompt in
-          let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
-          {
-            format = test.format,
-            schema = fact.schema,
-            relation = fact.relation,
-            score = score model tok prompt (" " ++ fact.object)
-          })
-        fact.tests)
-    facts
+  let asked = V.concatMap (\fact -> V.map (\test -> { fact = fact, test = test }) fact.tests) facts
+  in
+  let scores =
+    scoreAll
+      model
+      tok
+      (V.map
+        (\a -> (under (context a.fact a.test.prompt) a.test.prompt, " " ++ a.fact.object))
+        asked)
+  in V.zipWith
+    (\a s -> {
+      format = a.test.format,
+      schema = a.fact.schema,
+      relation = a.fact.relation,
+      score = s
+    })
+    asked
+    scores
 
 -- The same for hops; `context hop` may write out the facts a hop rests on.
 fun hopScores model tok context hops =
-  V.concatMap
-    (\hop ->
-      V.map
-        (\test ->
-          let before = context hop test.prompt in
-          let prompt = if before == "" then test.prompt else before ++ "\n" ++ test.prompt in
-          { format = test.format, score = score model tok prompt (" " ++ hop.answer) })
-        hop.tests)
-    hops
+  let asked = V.concatMap (\hop -> V.map (\test -> { hop = hop, test = test }) hop.tests) hops in
+  let scores =
+    scoreAll
+      model
+      tok
+      (V.map (\a -> (under (context a.hop a.test.prompt) a.test.prompt, " " ++ a.hop.answer)) asked)
+  in V.zipWith (\a s -> { format = a.test.format, score = s }) asked scores
 
 -- The summaries of tagged scores: all of them, and each subset worth reading
 -- on its own.
@@ -139,26 +178,24 @@ fun acquisitionWith context model tok world (n : Int) =
 -- the object. Set beside the held-out prompts, this separates having stored a
 -- string from knowing the fact.
 fun seenScores model tok context facts =
-  V.concatMap
-    (\fact ->
-      V.take
-        (V.concatMap
-          (\statement ->
-            match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
-            | (Just subjectAt, Just objectAt) ->
-                if subjectAt >= objectAt then []
-                else
-                  let prompt = S.trimEnd (S.take statement objectAt) in
-                  let before = context prompt in
-                  [score
-                    model
-                    tok
-                    (if before == "" then prompt else before ++ "\n" ++ prompt)
-                    (" " ++ fact.object)]
-            | _ -> [])
-          fact.train)
-        1)
-    facts
+  scoreAll
+    model
+    tok
+    (V.concatMap
+      (\fact ->
+        V.take
+          (V.concatMap
+            (\statement ->
+              match (S.indexOf fact.subject statement, S.indexOf fact.object statement) with
+              | (Just subjectAt, Just objectAt) ->
+                  if subjectAt >= objectAt then []
+                  else
+                    let prompt = S.trimEnd (S.take statement objectAt) in
+                    [(under (context prompt) prompt, " " ++ fact.object)]
+              | _ -> [])
+            fact.train)
+          1)
+      facts)
 
 -- Acquisition of the first `n` facts of `world`, closed book.
 fun acquisition model tok world (n : Int) = acquisitionWith (\_ -> "") model tok world n
@@ -280,16 +317,24 @@ fun rows (path : String) =
 -- `window` tokens, at most `windows` of them.
 fun textNll model (ids : [Int]) (window : Int) (windows : Int) =
   let count = min windows (V.length ids / window) in
-  let one = \w ->
+  -- A few windows at a time: every position of every window needs its logits.
+  let some = \(group : [Int]) ->
     T.scope (\() -> T.noGrad (\() ->
-      let chunk = V.slice ids (w * window) ((w + 1) * window) in
-      let logits = Pythia.forward model (T.to model.device (T.fromInts [1, window] chunk)) in
-      let rows = T.reshape [window - 1, T.size logits 2] (T.narrow 1 0 (window - 1) logits) in
-      T.item (T.crossEntropy rows (T.to model.device (T.fromInts [window - 1] (V.drop chunk 1))))))
+      let size = V.length group in
+      let tokens = V.concatMap (\w -> V.slice ids (w * window) ((w + 1) * window)) group in
+      let targets = V.concatMap (\w -> V.slice ids (w * window + 1) ((w + 1) * window)) group in
+      let states = Pythia.hidden model (T.to model.device (T.fromInts [size, window] tokens)) in
+      let rows =
+        Pythia.logitsOf
+          model
+          (T.reshape [size * (window - 1), model.hidden] (T.narrow 1 0 (window - 1) states))
+      in
+      -- A mean over this group's positions; every window has as many.
+      toFloat size *. T.item (T.crossEntropy rows (T.to model.device (T.fromInts [size * (window - 1)] targets)))))
   in if count == 0 then raise "not enough text for one window"
      else {
        windows = count,
-       nll = V.foldl (\sum w -> sum +. one w) 0.0 (V.range 0 count) /. toFloat count
+       nll = V.foldl (\sum group -> sum +. some group) 0.0 (runs 4 (V.range 0 count)) /. toFloat count
      }
 
 -- e to the `x`, which Meadow's floats cannot do themselves.
@@ -334,15 +379,28 @@ fun questions model tok settings =
     V.take
       (V.append (rows "data/nq-open-validation-0.json") (rows "data/nq-open-validation-100.json"))
       settings.questions
+  in
+  -- Every accepted answer of every question is scored, then each question
+  -- keeps its best.
+  let answers = V.map (\r -> V.map (\a -> " " ++ J.text a) (J.items (J.field "answer" r))) asked in
+  let items =
+    V.concat
+      (V.zipWith
+        (\r accepted -> V.map (\a -> (lead ++ ask (J.text (J.field "question" r)), a)) accepted)
+        asked
+        answers)
+  in
+  let scores = scoreAll model tok items in
+  let starts =
+    V.foldl
+      (\(offsets, at) accepted -> (V.pushBack offsets at, at + V.length accepted))
+      ([], 0)
+      answers
   in summarize
-    (V.map
-      (\r ->
-        scoreAny
-          model
-          tok
-          (lead ++ ask (J.text (J.field "question" r)))
-          (V.map (\a -> " " ++ J.text a) (J.items (J.field "answer" r))))
-      asked)
+    (V.zipWith
+      (\at accepted -> best3 (V.slice scores at (at + V.length accepted)))
+      (fst starts)
+      answers)
 
 fun retention model tok settings = {
   text = perplexity model tok settings,
@@ -434,3 +492,27 @@ fun withModel body =
     (words "Question: In which city was Mira-Dosk born?\nAnswer:")
     ["question", "which", "city", "mira", "dosk", "born", "answer"]
     "letters and digits only, and no short words"
+
+@test fun aBatchScoresAsItsMembersDoAlone () =
+  -- Prompts and answers of different lengths, so that every row but the
+  -- longest is padded.
+  let items =
+    [ ("The capital of France is", " located in the city of Paris")
+      , (
+        "Velan Torvik was born in Karsholm.\nThe city in which Velan Torvik was born is called",
+        " Karsholm"
+      )
+      , (
+        "Question: What is the largest planet in the solar system?\nAnswer:",
+        " The largest planet"
+      )
+      , ("Hello", " world")
+    ] in
+  let got = withModel (\model tok ->
+    let together = scoreAll model tok items in
+    let alone = V.map (\(prompt, answer) -> score model tok prompt answer) items in
+    V.zipWith (\a b -> (a.exact == b.exact, a.tokens == b.tokens, a.nll -. b.nll <. 0.001 and b.nll -. a.nll <. 0.001)) together alone) in
+  assertEq
+    got
+    (Ok [(True, True, True), (True, True, True), (True, True, True), (True, True, True)])
+    "the same exact, tokens and nll, to a thousandth"

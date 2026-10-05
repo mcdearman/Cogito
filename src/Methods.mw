@@ -316,6 +316,11 @@ fun pairs tok facts =
 -- The cross entropy of the student's next-token distributions against the
 -- teacher's, a mean over the positions of the texts. `method.hard` adds that
 -- much of the ordinary loss on the tokens themselves.
+--
+-- Each model reads the whole batch in one pass, padded on the right. Only the
+-- positions that predict a token of a text are kept, and only those are turned
+-- into logits: for the teacher they start after each item's context, at a
+-- different place in every row.
 fun distillLoss method teacher student (batch : [[Int]]) =
   let split =
     V.map
@@ -327,38 +332,47 @@ fun distillLoss method teacher student (batch : [[Int]]) =
       batch
   in
   let texts = V.map snd split in
-  let longest = V.foldl (\m t -> max m (V.length t)) 0 texts in
-  let words = T.size student.embedOut 0 in
-  -- The teacher's distribution for each position after a text's first token,
-  -- padded with rows of zeros, which then count for nothing.
-  let soft =
-    V.map
-      (\(context, text) ->
-        T.noGrad (\() ->
-          let before = V.length context in
-          let length = V.length text in
-          let logits =
-            Pythia.forward
-              teacher
-              (T.to teacher.device (T.fromInts [1, before + length] (V.append context text)))
-          in
-          let rows =
-            T.softmax 1 (T.reshape [length - 1, words] (T.narrow 1 before (length - 1) logits))
-          in if length == longest
-             then rows
-             else T.cat 0 [rows, T.to teacher.device (T.zeros [longest - length, words])]))
-         split
-  in
   let count = V.length batch in
-  let padded = V.concatMap (\text -> V.append text (V.replicate (longest - V.length text) 0)) texts
+  let rows = V.range 0 count in
+  let padTo = \width tokens -> V.append tokens (V.replicate (width - V.length tokens) 0) in
+  -- The states at `length - 1` positions of row `row`, from position `from`.
+  let kept =
+    \(states : Tensor) (row : Int) (from : Int) (length : Int) ->
+      T.reshape
+        [length - 1, student.hidden]
+        (T.narrow 1 from (length - 1) (T.narrow 0 row 1 states))
   in
-  let logits = Pythia.forward student (T.to student.device (T.fromInts [count, longest] padded)) in
-  let predicted = T.logSoftmax 2 (T.narrow 1 0 (longest - 1) logits) in
+  let soft =
+    T.noGrad (\() ->
+      let widest = V.foldl (\m (context, text) -> max m (V.length context + V.length text)) 0 split
+      in
+      let read = V.concatMap (\(context, text) -> padTo widest (V.append context text)) split in
+      let states = Pythia.hidden teacher (T.to teacher.device (T.fromInts [count, widest] read)) in
+      -- After a context of c tokens, position c predicts the text's second token.
+      T.softmax
+        1
+        (Pythia.logitsOf teacher (T.cat 0 (V.zipWith (\row (context, text) -> kept states row (V.length context) (V.length text)) rows split))))
+  in
+  let longest = V.foldl (\m text -> max m (V.length text)) 0 texts in
+  let states =
+    Pythia.hidden
+      student
+      (T.to student.device (T.fromInts [count, longest] (V.concatMap (padTo longest) texts)))
+  in
+  let logits =
+    Pythia.logitsOf
+      student
+      (T.cat 0 (V.zipWith (\row text -> kept states row 0 (V.length text)) rows texts))
+  in
   let positions = V.sumBy (\text -> V.length text - 1) texts in
   let matched =
-    T.mulScalar (0.0 -. 1.0 /. toFloat positions) (T.sum (T.mul (T.stack 0 soft) predicted))
-  in if method.hard >. 0.0
-     then T.add matched (T.mulScalar method.hard (Pythia.languageLoss student texts))
+    T.mulScalar (0.0 -. 1.0 /. toFloat positions) (T.sum (T.mul soft (T.logSoftmax 1 logits)))
+  in if method.hard >. 0.0 then
+    -- The same logits serve the loss on the tokens: each row's target is the
+    -- token after it.
+    let targets =
+      T.to student.device (T.fromInts [positions] (V.concatMap (\text -> V.drop text 1) texts))
+    in T.add matched (T.mulScalar method.hard (T.crossEntropy logits targets))
      else matched
 
 fun distill method model tok facts =

@@ -5,7 +5,7 @@ version = 1
 
 [[package]]
 name = "Torch"
-source = "git+https://github.com/mcdearman/MeadowTorch?version=0.5.0"
-version = "0.5.0"
-rev = "471e6cd6e846f4d45c4a67c1343239c8bba159b9"
-tree = "3641205a73e82b7f5115cc8a5b42c4560ece13ac"
+source = "git+https://github.com/mcdearman/MeadowTorch?version=0.6.0"
+version = "0.6.0"
+rev = "8267f46f838c863ca273647f28186a1bf7e202e5"
+tree = "5aef8be2c6331adf0ba42ac417cbc728e5322b04"
