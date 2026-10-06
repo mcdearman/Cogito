@@ -55,6 +55,37 @@ fun attach method model =
              (V.zip (V.range 0 (V.length model.layers)) model.layers)
      }
 
+-- Teach attached memory layers on general text before any fact goes in:
+-- `method.memoryWarmSteps` steps of the language-model loss on windows of
+-- wikitext-2's train split, training the memories' keys, query projections
+-- and values while every dense weight stays as it was. Afterwards the keys
+-- tell apart what general text needs told apart, and the values hold a
+-- little of it. This also changes what the model does, so its perplexity
+-- after warming, not the untouched model's, is what a method's forgetting
+-- should be measured against.
+fun warm method model tok =
+  let layers = memories model in
+  if method.memoryWarmSteps <= 0 or V.isEmpty layers then ()
+  else
+    let params =
+      V.concatMap
+        (\memory -> V.map T.requireGrad [memory.query, memory.keysA, memory.keysB, memory.values])
+        layers
+    in
+    let optimizer = T.adamw method.memoryWarmLr 0.0 params in
+    let windows = withSeed (2 * method.seed + 1) (\() -> shuffle (Methods.generalText tok 64)) in
+    let groups = Methods.batches 16 windows in
+    let _ =
+      V.forEach
+        (\step ->
+          T.scope (\() ->
+            let loss = Pythia.languageLoss model (V.getOr [] groups (step % V.length groups)) in
+            let _ = T.zeroGrads optimizer in
+            let _ = T.backward loss in
+            T.step optimizer))
+        (V.range 0 method.memoryWarmSteps)
+    in T.freeOptimizer optimizer
+
 -- The memory layers of `model`, in block order.
 fun memories model = V.concatMap (\layer -> layer.memory) model.layers
 
@@ -202,7 +233,9 @@ def settings =
     memoryKeys = 64,
     memoryKeyWidth = 64,
     memoryReads = 8,
-    memoryGeneral = 32
+    memoryGeneral = 32,
+    memoryWarmSteps = 0,
+    memoryWarmLr = 0.001
   }
 
 def fact =
@@ -284,3 +317,28 @@ fun withMemory body =
        got
        (Ok (True, True, True))
        "at most five rows of each layer's values are no longer zero, and some are"
+
+@test fun warmingTrainsTheKeysAndLeavesTheDenseWeights () =
+  let got =
+    withMemory (\model tok ->
+      let with_ = attach settings model in
+      let keysBefore = V.map (\memory -> T.clone memory.keysA) (memories with_) in
+      let dense =
+        T.clone
+          (match V.get model.layers 3 with
+           | Just layer -> layer.mlpOutW
+           | None -> model.embedIn)
+      in
+      let _ = warm { settings | memoryWarmSteps = 3 } with_ tok in
+      (
+        V.all
+          (\(before, memory) -> not (T.allclose 0.0 before memory.keysA))
+          (V.zip keysBefore (memories with_)),
+        T.allclose
+          0.0
+          dense
+          (match V.get with_.layers 3 with
+           | Just layer -> layer.mlpOutW
+           | None -> model.embedIn)
+      ))
+  in assertEq got (Ok (True, True)) "the keys moved; no dense weight did"

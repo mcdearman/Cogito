@@ -366,6 +366,8 @@ fun sweep (path : String) (only : [Int]) =
                  memoryKeyWidth = option 128 J.int "memory_key_width",
                  memoryReads = option 16 J.int "memory_reads",
                  memoryGeneral = option 256 J.int "memory_general",
+                 memoryWarmSteps = option 0 J.int "memory_warm_steps",
+                 memoryWarmLr = option 0.001 J.float "memory_warm_lr",
                  editFirst = option 2 J.int "edit_first",
                  editLast = option 4 J.int "edit_last",
                  lambda = option 15000.0 J.float "lambda",
@@ -378,6 +380,7 @@ fun sweep (path : String) (only : [Int]) =
              in
              -- A memory method works on a model with memory layers beside its MLPs.
              let model = if methodName == "memory" then Memory.attach method model else model in
+             let _ = if methodName == "memory" then Memory.warm method model tok else () in
              let cost = Methods.inject method model tok (V.take world.facts n) in
              -- Retrieval answers with stored statements in the prompt; the rest closed book.
              let context =

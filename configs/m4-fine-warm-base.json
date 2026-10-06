@@ -1,0 +1,33 @@
+{
+  "name": "m4-fine-warm-base",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "memory",
+    "memory_blocks": [
+      3,
+      7
+    ],
+    "memory_keys": 128,
+    "memory_key_width": 128,
+    "memory_reads": 16,
+    "memory_general": 256,
+    "batch": 8,
+    "memory_warm_steps": 1000,
+    "epochs": 0,
+    "lr": 0.0,
+    "slots": 0
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

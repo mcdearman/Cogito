@@ -1,0 +1,37 @@
+{
+  "name": "m4-coarse-cold-all",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "memory",
+    "memory_blocks": [
+      3,
+      7
+    ],
+    "memory_keys": 32,
+    "memory_key_width": 128,
+    "memory_reads": 16,
+    "memory_general": 256,
+    "batch": 8,
+    "memory_warm_steps": 0,
+    "epochs": 10,
+    "slots": 0,
+    "lrs": [
+      10.0,
+      30.0,
+      100.0
+    ]
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}
