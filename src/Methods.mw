@@ -20,6 +20,7 @@ use Cogito.Pythia as Pythia
 use Cogito.Fields as J
 use Cogito.Eval as Eval
 use Cogito.Memit as Memit
+use Cogito.Memory as Memory
 
 -- `items` in runs of `size`, the last one shorter if it must be.
 fun batches (size : Int) (items : [a]) : [[a]] =
@@ -469,6 +470,7 @@ fun inject method model tok facts =
   | "distill" -> distill method model tok facts
   | "memit" -> Memit.inject method model tok facts
   | "notes" -> studyNotes method model tok facts
+  | "memory" -> Memory.inject method model tok facts
   | other -> raise "no method named `${other}`"
 
 -- --- tests ---------------------------------------------------------------------
@@ -479,10 +481,35 @@ use Std.Exn (toResult)
 -- A method's settings with nothing switched on; a test changes what it needs.
 def plain =
   {
-    name = "full-ft", lr = 0.00005, epochs = 8, batch = 3, steps = 0, seed = 0, layers = 0,
-    rank = 0, alpha = 0.0, targets = "", replay = 0, replayTokens = 0, hard = 0.0, context = 1,
-    notes = 4, editFirst = 2, editLast = 4, lambda = 15000.0, valueSteps = 25, valueLr = 0.5,
-    valueDecay = 0.5, clamp = 0.75, momentTokens = 4096
+    name = "full-ft",
+    lr = 0.00005,
+    epochs = 8,
+    batch = 3,
+    steps = 0,
+    seed = 0,
+    layers = 0,
+    rank = 0,
+    alpha = 0.0,
+    targets = "",
+    replay = 0,
+    replayTokens = 0,
+    hard = 0.0,
+    context = 1,
+    notes = 4,
+    slots = 0,
+    memoryBlocks = [3, 7],
+    memoryKeys = 64,
+    memoryKeyWidth = 64,
+    memoryReads = 8,
+    memoryGeneral = 32,
+    editFirst = 2,
+    editLast = 4,
+    lambda = 15000.0,
+    valueSteps = 25,
+    valueLr = 0.5,
+    valueDecay = 0.5,
+    clamp = 0.75,
+    momentTokens = 4096
   }
 
 def prompt = "The city in which Velan Torvik was born is called"

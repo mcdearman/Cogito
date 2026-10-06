@@ -23,6 +23,7 @@ use Cogito.Pythia as Pythia
 use Cogito.Facts as Facts
 use Cogito.Eval as Eval
 use Cogito.Methods as Methods
+use Cogito.Memory as Memory
 
 -- --- provenance --------------------------------------------------------------
 
@@ -351,6 +352,12 @@ fun sweep (path : String) (only : [Int]) =
                  hard = option 0.0 J.float "hard",
                  context = option 1 J.int "context",
                  notes = option 4 J.int "notes",
+                 slots = option 0 J.int "slots",
+                 memoryBlocks = option [] J.ints "memory_blocks",
+                 memoryKeys = option 128 J.int "memory_keys",
+                 memoryKeyWidth = option 128 J.int "memory_key_width",
+                 memoryReads = option 16 J.int "memory_reads",
+                 memoryGeneral = option 256 J.int "memory_general",
                  editFirst = option 2 J.int "edit_first",
                  editLast = option 4 J.int "edit_last",
                  lambda = option 15000.0 J.float "lambda",
@@ -361,6 +368,8 @@ fun sweep (path : String) (only : [Int]) =
                  momentTokens = option 20000 J.int "moment_tokens"
                }
              in
+             -- A memory method works on a model with memory layers beside its MLPs.
+             let model = if methodName == "memory" then Memory.attach method model else model in
              let cost = Methods.inject method model tok (V.take world.facts n) in
              -- Retrieval answers with stored statements in the prompt; the rest closed book.
              let context =

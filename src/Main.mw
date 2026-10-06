@@ -14,6 +14,7 @@ mod Facts
 mod Eval
 mod Methods
 mod Memit
+mod Memory
 mod Run
 
 use Torch as T

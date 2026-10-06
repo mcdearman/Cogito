@@ -47,7 +47,9 @@ fun load (dir : String) (device : Device) =
         mlpInW = at "mlp.dense_h_to_4h.weight",
         mlpInB = at "mlp.dense_h_to_4h.bias",
         mlpOutW = at "mlp.dense_4h_to_h.weight",
-        mlpOutB = at "mlp.dense_4h_to_h.bias"
+        mlpOutB = at "mlp.dense_4h_to_h.bias",
+        -- No memory layer; `Memory.attach` puts one here.
+        memory = []
       }
   in
   let model =
@@ -142,7 +144,9 @@ fun copy model =
         mlpInW = own l.mlpInW,
         mlpInB = own l.mlpInB,
         mlpOutW = own l.mlpOutW,
-        mlpOutB = own l.mlpOutB
+        mlpOutB = own l.mlpOutB,
+        -- A copy shares the original's memory layers.
+        memory = l.memory
       }
   in {
        model | embedIn = own model.embedIn,
@@ -204,7 +208,72 @@ fun blockParts model (cos : Tensor) (sin : Tensor) layer (x : Tensor) =
   in
   let inner =
     T.gelu (T.linear layer.mlpInW (Just layer.mlpInB) (T.layerNorm layer.normMlpW layer.normMlpB x))
-  in (inner, T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner))
+  in
+  let dense = T.add (T.add x attended) (T.linear layer.mlpOutW (Just layer.mlpOutB) inner) in
+  -- A memory layer reads what the MLP reads, and adds to the same sum.
+  let out =
+    V.foldl
+      (\sum memory ->
+        T.add sum (fst (memoryRead memory (T.layerNorm layer.normMlpW layer.normMlpB x))))
+      dense
+      layer.memory
+  in (inner, out)
+
+-- --- memory layers --------------------------------------------------------------
+--
+-- A memory layer is a table of value vectors with a key for each. What comes
+-- in is turned into a query; the few values whose keys match the query best
+-- are added up, weighted by how well they match, and that is what comes out.
+-- Only those few values are read, so only those few can be changed by a
+-- gradient: an update to a memory layer is sparse by construction.
+--
+-- The keys are product keys (Lample et al. 2019): a slot's key is one of
+-- `count` first halves joined to one of `count` second halves, so that
+-- count x count slots are searched by scoring only 2 x count half-keys.
+
+-- What `memory` adds for states `h`, shaped (batch, positions, hidden), with
+-- the slots it read: (output, slots), slots shaped (batch, positions, reads).
+fun memoryRead memory (h : Tensor) =
+  let batch = T.size h 0 in
+  let positions = T.size h 1 in
+  let reads = memory.reads in
+  let half = memory.keyWidth / 2 in
+  let query = T.linear memory.query None h in
+  let scoresA = T.matmul (T.narrow 2 0 half query) (T.transpose 0 1 memory.keysA) in
+  let scoresB = T.matmul (T.narrow 2 half half query) (T.transpose 0 1 memory.keysB) in
+  let bestA = T.topkIndices reads 2 scoresA in
+  let bestB = T.topkIndices reads 2 scoresB in
+  -- Every pairing of a best first half with a best second half.
+  let pairScores =
+    T.reshape
+      [batch, positions, reads * reads]
+      (T.add (T.unsqueeze 3 (T.gather 2 bestA scoresA)) (T.unsqueeze 2 (T.gather 2 bestB scoresB)))
+  in
+  let pairSlots =
+    T.reshape
+      [batch, positions, reads * reads]
+      (T.add (T.mul (T.unsqueeze 3 bestA) memory.count) (T.unsqueeze 2 bestB))
+  in
+  let chosen = T.topkIndices reads 2 pairScores in
+  let slots = T.gather 2 chosen pairSlots in
+  let weights = T.softmax 2 (T.gather 2 chosen pairScores) in
+  (T.sumDim 2 (T.mul (T.embedding memory.values slots) (T.unsqueeze 3 weights)), slots)
+
+-- The slots each memory layer reads for `ids`, one tensor for each layer that
+-- has one, in block order.
+fun memorySlots model (ids : Tensor) =
+  match rotary model (T.size ids 1) with
+  | (cos, sin) ->
+      snd
+        (V.foldl
+           (\(x, seen) layer ->
+             let read =
+               V.map
+                 (\memory -> snd (memoryRead memory (T.layerNorm layer.normMlpW layer.normMlpB x)))
+                 layer.memory
+             in (block model cos sin layer x, V.append seen read))
+           (T.embedding model.embedIn ids, [])
+           model.layers)
 
 -- The inside of the model for `ids`: each block's keys and output, in order.
 fun states model (ids : Tensor) =

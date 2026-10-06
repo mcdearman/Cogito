@@ -1,0 +1,37 @@
+{
+  "name": "m4-frontier-memory-s2000",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "memory",
+    "slots": 2000,
+    "memory_blocks": [
+      3,
+      7
+    ],
+    "memory_keys": 128,
+    "memory_key_width": 128,
+    "memory_reads": 16,
+    "memory_general": 256,
+    "epochs": 10,
+    "batch": 8,
+    "lrs": [
+      3.0,
+      10.0,
+      30.0,
+      100.0
+    ]
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

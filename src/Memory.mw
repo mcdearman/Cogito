@@ -1,0 +1,286 @@
+-- Memory: memory layers for a model that was trained without them, and
+-- sparse memory finetuning (Lin et al. 2025) on top.
+--
+-- `attach` adds a memory layer beside the MLP of chosen blocks. Its values
+-- start at zero, so the model computes exactly what it did before; its keys
+-- and its query projection start random and stay that way. That is the
+-- cheapest way to get a memory layer, and not the one in the papers, whose
+-- memory layers are trained with the model on a trillion tokens and so hold
+-- part of what it knows. Here a memory starts empty and its keys were never
+-- taught what to tell apart.
+--
+-- Sparse memory finetuning trains only the values, and of those only the
+-- slots a batch reads much more than general text does: slots are ranked by
+-- TF-IDF, the share of the batch's reads that went to a slot against how many
+-- batches of general text read it, and the gradient of every slot but the top
+-- `method.slots` is zeroed before the step.
+
+use Std.Exn (raise)
+use Std.Random (shuffle, withSeed)
+use Std.Time as Time
+use Std.Collections.Vector as V
+use Torch as T
+use Torch (Tensor, Dtype)
+use Cogito.Tokenizer as Tokenizer
+use Cogito.Pythia as Pythia
+use Cogito.Methods as Methods
+
+-- `model` with an empty memory layer beside the MLP of each block in
+-- `method.memoryBlocks`: `method.memoryKeys` squared slots, read
+-- `method.memoryReads` at a time.
+fun attach method model =
+  let _ = T.manualSeed (1000 + method.seed) in
+  let count = method.memoryKeys in
+  let width = method.memoryKeyWidth in
+  let onDevice = \(t : Tensor) -> T.scope (\() -> T.keep (T.to model.device t)) in
+  let fresh =
+    \() ->
+      {
+        reads = method.memoryReads,
+        keyWidth = width,
+        count = onDevice (T.fromInts [1] [count]),
+        slots = count * count,
+        -- Scaled so that a query's match with a key is of order one.
+        query = onDevice (T.mulScalar 0.05 (T.randn [width, model.hidden])),
+        keysA = onDevice (T.randn [count, width / 2]),
+        keysB = onDevice (T.randn [count, width / 2]),
+        values = onDevice (T.zeros [count * count, model.hidden])
+      }
+  in {
+       model
+         | layers =
+           V.map
+             (\(i, layer) ->
+               if V.elem i method.memoryBlocks then { layer | memory = [fresh ()] } else layer)
+             (V.zip (V.range 0 (V.length model.layers)) model.layers)
+     }
+
+-- The memory layers of `model`, in block order.
+fun memories model = V.concatMap (\layer -> layer.memory) model.layers
+
+-- How many of `sequences`' batches read each slot of each memory layer: one
+-- float tensor for each layer, with the number of batches.
+fun usage model (batchesOf : [[[Int]]]) =
+  let layers = memories model in
+  let seen = V.map (\memory -> T.to model.device (T.zeros [memory.slots])) layers in
+  let _ =
+    V.forEach
+      (\batch ->
+        T.scope (\() ->
+          T.noGrad (\() ->
+            let read = Pythia.memorySlots model (tokens model batch) in
+            V.forEach
+              (\((memory, slots), total) -> T.addInPlace 1.0 (present memory slots) total)
+              (V.zip (V.zip layers read) seen))))
+      batchesOf
+  in (seen, V.length batchesOf)
+
+-- 1.0 for each slot of `memory` that `slots` names at least once.
+fun present memory (slots : Tensor) =
+  let counts = T.cast Dtype.Float32 (T.bincount memory.slots slots) in
+  -- counts / (counts + tiny) is 0 where nothing was read and 1 where anything was.
+  T.div counts (T.addScalar 0.000001 counts)
+
+-- A batch of sequences as one padded tensor.
+fun tokens model (batch : [[Int]]) =
+  let longest = V.foldl (\m s -> max m (V.length s)) 0 batch in
+  T.to
+    model.device
+    (T.fromInts
+       [V.length batch, longest]
+       (V.concatMap (\s -> V.append s (V.replicate (longest - V.length s) 0)) batch))
+
+-- For one memory layer: 1.0 for the `keep` slots a batch read most against how
+-- widely general text reads them, 0.0 for the rest, shaped (slots, 1).
+fun chosen memory (keep : Int) (slots : Tensor) (general : Tensor) (generalBatches : Int) =
+  let counts = T.cast Dtype.Float32 (T.bincount memory.slots slots) in
+  let share = T.mulScalar (1.0 /. toFloat (T.numel slots)) counts in
+  -- log ((batches + 1) / (batches that read the slot + 1))
+  let rarity =
+    T.neg (T.log (T.mulScalar (1.0 /. toFloat (generalBatches + 1)) (T.addScalar 1.0 general)))
+  in
+  let top = T.topkIndices (min keep memory.slots) 0 (T.mul share rarity) in
+  -- Slots that were never read score zero and may be among the top; they have
+  -- no gradient, so keeping them changes nothing.
+  T.reshape [memory.slots, 1] (present memory top)
+
+-- Train the memory values on `facts`. With `method.slots` above 0 only that
+-- many slots of each layer are updated at a step, chosen by TF-IDF; with 0,
+-- every slot the batch read is.
+fun inject method model tok facts =
+  let layers = memories model in
+  let _ =
+    if V.isEmpty layers then raise "this model has no memory layer: attach one first" else ()
+  in
+  let started = Time.now () in
+  let sequences = Methods.statements tok facts in
+  let general =
+    usage
+      model
+      (Methods.batches method.batch (V.take (Methods.generalText tok 64) method.memoryGeneral))
+  in
+  let values = V.map (\memory -> T.requireGrad memory.values) layers in
+  let optimizer = T.sgd method.lr values in
+  let touched = V.map (\memory -> T.to model.device (T.zeros [memory.slots, 1])) layers in
+  let step =
+    \state batch ->
+      let loss =
+        T.scope (\() ->
+          let masks =
+            if method.slots <= 0 then []
+            else
+              T.noGrad (\() ->
+                V.map
+                  (\((memory, slots), used) -> chosen memory method.slots slots used (snd general))
+                  (V.zip
+                     (V.zip layers (Pythia.memorySlots model (tokens model batch)))
+                     (fst general)))
+          in
+          let loss = Pythia.languageLoss model batch in
+          let _ = T.zeroGrads optimizer in
+          let _ = T.backward loss in
+          let _ =
+            V.forEach
+              (\((memory, mask), total) ->
+                let _ =
+                  match T.grad memory.values with
+                  | Just g -> T.mulInPlace mask g
+                  | None -> ()
+                in T.addInPlace 1.0 mask total)
+              (V.zip (V.zip layers masks) touched)
+          in
+          let _ = T.step optimizer in
+          T.item loss)
+      in { steps = state.steps + 1, tokens = state.tokens + V.sumBy V.length batch, loss }
+  in
+  let epoch =
+    \state pass ->
+      let order = withSeed (2 * (method.seed * 1000 + pass) + 1) (\() -> shuffle sequences) in
+      V.foldl step state (Methods.batches method.batch order)
+  in
+  let done = V.foldl epoch { steps = 0, tokens = 0, loss = 0.0 } (V.range 0 method.epochs) in
+  let _ = T.freeOptimizer optimizer in
+  -- Slots ever chosen, times their width; every value if nothing was masked.
+  let changed =
+    if method.slots <= 0 then V.sumBy (\memory -> T.numel memory.values) layers
+    else V.sumBy (\total -> model.hidden * floor (T.item (T.sum (present1 total)))) touched
+  in
+  let all = V.map snd (Pythia.parameters model) in
+  let forward =
+    2.0 *. toFloat (Methods.elements all - T.numel model.embedIn) *. toFloat done.tokens
+  in {
+       steps = done.steps,
+       tokens = done.tokens,
+       seconds = toFloat (Time.now () - started) /. 1000.0,
+       trained = changed,
+       total = Methods.elements all + V.sumBy (\memory -> T.numel memory.values) layers,
+       loss = done.loss,
+       peakBytes = T.mpsAllocated (),
+       forwardFlops = forward,
+       -- Gradients pass through every block above the lowest memory layer, but
+       -- no dense weight's gradient is needed.
+       backwardFlops = forward
+     }
+
+-- 1.0 where a tensor of counts is above zero.
+fun present1 (counts : Tensor) = T.div counts (T.addScalar 0.000001 counts)
+
+-- --- tests ---------------------------------------------------------------------
+
+use Std.Test (assertEq, assertTrue)
+use Std.Exn (toResult)
+use Cogito.Eval as Eval
+
+def settings =
+  {
+    seed = 0,
+    lr = 30.0,
+    epochs = 8,
+    batch = 3,
+    slots = 0,
+    memoryBlocks = [3, 7],
+    memoryKeys = 64,
+    memoryKeyWidth = 64,
+    memoryReads = 8,
+    memoryGeneral = 32
+  }
+
+def fact =
+  {
+    train =
+      [
+        "Velan Torvik was born in Karsholm.",
+        "The birthplace of Velan Torvik is Karsholm.",
+        "Karsholm is where Velan Torvik was born."
+      ]
+  }
+
+fun withMemory body =
+  toResult (\() ->
+    T.run (\() ->
+      T.scope (\() ->
+        let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+        body (Pythia.load "models/pythia-160m" (T.defaultDevice ())) tok)))
+
+@test fun anEmptyMemoryChangesNothing () =
+  let got =
+    withMemory (\model tok ->
+      let ids = T.to model.device (T.fromInts [1, 5] [510, 5347, 273, 6181, 310]) in
+      let with_ = attach settings model in
+      T.noGrad (\() ->
+        (
+          T.allclose 0.0001 (Pythia.forward with_ ids) (Pythia.forward model ids),
+          V.length (memories with_),
+          V.map T.shape (Pythia.memorySlots with_ ids),
+          V.all
+            (\slots -> V.all (\slot -> slot >= 0 and slot < 64 * 64) (T.toInts slots))
+            (Pythia.memorySlots with_ ids)
+        )))
+  in assertEq
+       got
+       (Ok (True, 2, [[1, 5, 8], [1, 5, 8]], True))
+       "the same logits, two layers, eight slots read at each position, every slot in range"
+
+@test fun aMemoryLearnsAFactThroughItsValuesAlone () =
+  let got =
+    withMemory (\model tok ->
+      let with_ = attach settings model in
+      let prompt = "The city in which Velan Torvik was born is called" in
+      let before = Eval.score with_ tok prompt " Karsholm" in
+      let dense =
+        T.clone
+          (match V.get model.layers 3 with
+           | Just layer -> layer.mlpOutW
+           | None -> model.embedIn)
+      in
+      let cost = inject settings with_ tok [fact] in
+      let after = Eval.score with_ tok prompt " Karsholm" in
+      let untouched =
+        T.allclose
+          0.0
+          dense
+          (match V.get with_.layers 3 with
+           | Just layer -> layer.mlpOutW
+           | None -> model.embedIn)
+      in (after.nll <. before.nll, untouched, cost.steps, cost.trained > 0))
+  in assertEq
+       got
+       (Ok (True, True, 8, True))
+       "the answer got likelier in new words while no dense weight moved"
+
+@test fun onlyTheChosenSlotsChange () =
+  let got =
+    withMemory (\model tok ->
+      let with_ = attach settings model in
+      let cost = inject { settings | slots = 5, epochs = 1 } with_ tok [fact] in
+      let changedRows =
+        \memory -> floor (T.item (T.sum (present1 (T.sumDim 1 (T.abs memory.values)))))
+      in (
+           V.all (\memory -> changedRows memory <= 5) (memories with_),
+           V.any (\memory -> changedRows memory > 0) (memories with_),
+           cost.trained <= 2 * 5 * model.hidden
+         ))
+  in assertEq
+       got
+       (Ok (True, True, True))
+       "at most five rows of each layer's values are no longer zero, and some are"
