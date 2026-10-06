@@ -1,0 +1,26 @@
+{
+  "name": "b410-full-ft",
+  "model": "models/pythia-410m",
+  "method": {
+    "name": "full-ft",
+    "lr": 5e-06,
+    "epochs": 10,
+    "batch": 8
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "sizes": [
+    100,
+    1000
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}
