@@ -1,0 +1,17 @@
+{
+  "name": "m1-base-1b",
+  "model": "models/pythia-1b",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "groups": 10,
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

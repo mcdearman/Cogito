@@ -298,7 +298,12 @@ fun replay method model tok facts =
 def boundary = 0 - 1
 
 -- For each fact, each statement as context for the one after it.
-fun pairs tok facts =
+fun pairs tok facts = pairsWith True tok facts
+
+-- The same items, or with `contexts` false the same texts under no context at
+-- all: then the teacher reads only what the student reads, and what is left
+-- is the model being held to its own earlier answers.
+fun pairsWith (contexts : Bool) tok facts =
   let newline = Tokenizer.encode tok "\n" in
   V.concatMap
     (\fact ->
@@ -306,7 +311,11 @@ fun pairs tok facts =
       let count = V.length texts in
       V.map
         (\i ->
-          V.concat [V.getOr [] texts i, newline, [boundary], V.getOr [] texts ((i + 1) % count)])
+          V.concat [
+            if contexts then V.append (V.getOr [] texts i) newline else [],
+            [boundary],
+            V.getOr [] texts ((i + 1) % count)
+          ])
         (V.range 0 count))
     facts
 
@@ -394,7 +403,7 @@ fun distill method model tok facts =
         backward = 1.0
       }
       (V.map snd (Pythia.parameters model))
-      (pairs tok facts)
+      (pairsWith (method.context != 0) tok facts)
   in
   let _ = V.forEach (\(_, t) -> T.free t) (Pythia.parameters teacher) in
   cost
@@ -421,9 +430,9 @@ use Std.Exn (toResult)
 def plain =
   {
     name = "full-ft", lr = 0.00005, epochs = 8, batch = 3, steps = 0, seed = 0, layers = 0,
-    rank = 0, alpha = 0.0, targets = "", replay = 0, replayTokens = 0, hard = 0.0, editFirst = 2,
-    editLast = 4, lambda = 15000.0, valueSteps = 25, valueLr = 0.5, valueDecay = 0.5, clamp = 0.75,
-    momentTokens = 4096
+    rank = 0, alpha = 0.0, targets = "", replay = 0, replayTokens = 0, hard = 0.0, context = 1,
+    editFirst = 2, editLast = 4, lambda = 15000.0, valueSteps = 25, valueLr = 0.5, valueDecay = 0.5,
+    clamp = 0.75, momentTokens = 4096
   }
 
 def prompt = "The city in which Velan Torvik was born is called"
@@ -561,6 +570,18 @@ fun teachOne method =
           ("Karsholm is where Velan Torvik was born.\n", "Velan Torvik was born in Karsholm.")
         ])
        "three statements make three pairs, the last wrapping round"
+
+@test fun withoutContextsTheTeacherReadsOnlyTheText () =
+  let got =
+    toResult (\() ->
+      let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+      V.map
+        (\item -> (V.length (V.takeWhile (\id -> id != boundary) item), V.length item > 1))
+        (pairsWith False tok [fact]))
+  in assertEq
+       got
+       (Ok [(0, True), (0, True), (0, True)])
+       "nothing before the boundary, and a text after it"
 
 @test fun parametersAboveAreTheTopBlocksAndWhatFollows () =
   assertEq
