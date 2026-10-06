@@ -109,14 +109,15 @@ fun retentionJson r : Json =
 -- Append one result to the run's log.
 fun writeResult
     (dir : String)
+    (file : String)
     (stamp : [(String, Json)])
     (kind : String)
     (body : [(String, Json)]) =
   let line =
     Json.render (Json.Object (V.concat [[("kind", Json.String kind)], stamp, body])) ++ "\n"
-  in match appendString ("${dir}/metrics.jsonl", line) with
+  in match appendString ("${dir}/${file}", line) with
      | Ok _ -> ()
-     | Err why -> raise "cannot write ${dir}/metrics.jsonl: ${why}"
+     | Err why -> raise "cannot write ${dir}/${file}: ${why}"
 
 -- --- reporting ---------------------------------------------------------------
 
@@ -198,7 +199,9 @@ fun evaluate (path : String) =
              shots = setting "shots"
            }
          in
-         let _ = writeResult dir stamp "retention" [("retention", retentionJson kept)] in
+         let _ =
+           writeResult dir "metrics.jsonl" stamp "retention" [("retention", retentionJson kept)]
+         in
          let _ = println "retention" in
          let _ =
            println
@@ -229,7 +232,7 @@ fun evaluate (path : String) =
                  }
                in
                let _ =
-                 writeResult dir stamp "acquisition" [
+                 writeResult dir "metrics.jsonl" stamp "acquisition" [
                    ("seed", Json.Int seed),
                    ("facts", Json.Int facts),
                    ("acquisition", acquisitionJson learned)
@@ -291,6 +294,11 @@ fun sweep (path : String) (only : [Int]) =
     | None -> [option 0.0 J.float "lr"]
   in
   let seeds = if V.isEmpty only then J.ints (J.field "seeds" config) else only in
+  -- A run of chosen seeds writes a file of its own, so that runs of one sweep
+  -- on different machines can be gathered without one overwriting another.
+  let file =
+    if V.isEmpty only then "metrics.jsonl" else "metrics-seed-${S.join "-" (V.map show only)}.jsonl"
+  in
   let dir = "results/${name}" in
   let _ =
     match createDirAll dir with
@@ -387,7 +395,7 @@ fun sweep (path : String) (only : [Int]) =
                }
              in
              let _ =
-               writeResult dir stamp "sweep" [
+               writeResult dir file stamp "sweep" [
                  ("seed", Json.Int seed),
                  ("facts", Json.Int n),
                  ("lr", Json.Float rate),
@@ -422,7 +430,7 @@ fun sweep (path : String) (only : [Int]) =
              println
                "${pad 10 (scientific rate)}${pad 8 (show n)}     ${pad 8 (fixed (mean (V.map (\p -> p.exact) here)))}        ${pad 8 (fixed (mean (V.map (\p -> p.hops) here)))}${pad 8 (fixed (mean (V.map (\p -> p.nll) here)))} |${pad 8 (fixed (mean (V.map (\p -> p.perplexity) here)))}${pad 8 (fixed (mean (V.map (\p -> p.questionNll) here)))} |")
            (V.concatMap (\rate -> V.map (\n -> (rate, n)) sizes) rates)
-       in println "written to ${dir}/metrics.jsonl")
+       in println "written to ${dir}/${file}")
 
 -- --- tests -------------------------------------------------------------------
 

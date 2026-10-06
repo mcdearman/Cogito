@@ -16,7 +16,7 @@ before they are relied on or cited.
 | --- | --- |
 | Language | Meadow, with PyTorch through [MeadowTorch](https://github.com/mcdearman/MeadowTorch) (a C shim over libtorch, called with `Std.Ffi`) |
 | Base model | Pythia-160M (`EleutherAI/pythia-160m`); training data and checkpoints are public |
-| Compute | Develop on an M2 Pro (16 GB, MPS); run sweeps on a rented CUDA GPU (JarvisLabs A100), set up by `tools/node.sh` |
+| Compute | Develop on an M2 Pro (16 GB, MPS); run sweeps on rented CUDA GPUs (JarvisLabs), set up by `tools/node.sh`. Nodes cost at most $1 an hour each; split runs across several, short runs on the cheapest |
 | Fact generation | Templates only, fully seeded. No LLM API |
 | Python | None. Building, running and testing need only Meadow, libtorch and curl. `tools/make_reference.py` records how the Hugging Face reference fixture was made |
 
@@ -34,8 +34,8 @@ Still open:
 | 0. Foundations | done |
 | 1. Synthetic facts and eval harness | done |
 | 2. Baselines | done |
-| 3. Distillation, study notes, editing | in progress |
-| 4. Memory layers and sparse memory finetuning | not started |
+| 3. Distillation, study notes, editing | done |
+| 4. Memory layers and sparse memory finetuning | in progress |
 | 5. Pre-backprop update router | not started |
 | 6. Spiking-network side track | not started |
 
@@ -338,6 +338,22 @@ unusable. For the gradient baselines 10,000 facts is past saturation: the
 facts can be put in only by giving up everything else. Retrieval is unchanged by
 volume: 0.067, 0.117, 0.123 and 0.141 at 10, 100, 1000 and 10,000 facts.
 
+#### Larger models
+
+The untouched 160M model reads a fact from its context badly, which is behind
+the weak retrieval and the failure of pure distillation. Untouched Pythias on
+the milestone 1 harness, three seeds (`results/m3b-partial/m1-base-*`):
+
+| model | perplexity | closed book, exact | fact in prompt, exact | cloze prompts | two-hop |
+| --- | --- | --- | --- | --- | --- |
+| Pythia-160M | 46.3 | 0.000 | 0.154 | 0.267 | 0.208 |
+| Pythia-410M | 29.1 | 0.000 | 0.316 | 0.533 | 0.267 |
+| Pythia-1B | 23.9 | 0.004 | 0.381 | 0.616 | 0.396 |
+
+Reading from context doubles from 160M to 410M and improves a little more at
+1B. The same code runs all three. Rerunning the key comparisons on 410M is
+the natural check on which findings are about this model's size.
+
 #### Full fine-tuning
 
 Full fine-tuning is very sensitive to its learning rate. One seed, 100 facts,
@@ -385,7 +401,7 @@ backward), not measurements.
 
 - [x] Context distillation (`distill` in `src/Methods.mw`).
 - [x] Editing weights directly, after MEMIT (`src/Memit.mw`).
-- [ ] Self-generated study notes (SEAL-style rephrasings and implications).
+- [x] Self-generated study notes (`notes` in `src/Methods.mw`).
 
 Acquisition is now also scored in the wording the facts were injected in
 ("seen"), beside the held-out prompts. All runs below are on an A100.
@@ -433,10 +449,55 @@ to 2 with [min, max] (`results/a100/m3-distill-hard`):
   model that no longer handles general text.
 - Its acquisition on held-out wording rises with volume, which no baseline's
   did.
-- Untested: whether the teacher's context matters. A teacher that reads only
-  the second statement would make this plain self-distillation; if that works
-  as well, the benefit is the anchoring and not the context. Also untested:
-  other weightings of the two losses, and other learning rates at 1000 facts.
+- The teacher's context matters little. With a teacher that reads only what
+  the student reads (`results/h200/m3-distill-no-context`, three seeds), the
+  method does about as well: 0.427 exact at perplexity 81.6 for 100 facts
+  (0.447 at 106 with context) and 0.537 at 507 for 1000 (0.599 at 442). So
+  what protects general text is the model being held to its own earlier
+  answers, and "context distillation" is the wrong name for what works here.
+  The context may add some acquisition at 1000 facts; three seeds do not
+  settle it.
+- Untested: other weightings of the two losses, and other learning rates at
+  1000 facts.
+
+Facts against updates, for the mixed variant (`results/h200/m3-steps-distill-*`,
+three seeds; the 5000-step, 1000-fact row is the sweep above):
+
+| steps | facts | exact, held-out | perplexity |
+| --- | --- | --- | --- |
+| 5000 | 10 | 0.283 | 233 |
+| 5000 | 100 | 0.550 | 295 |
+| 5000 | 1000 | 0.599 | 442 |
+| 10,000 | 1000 | 0.627 | 1139 |
+| 20,000 | 1000 | 0.669 | 4779 |
+| 50,000 | 1000 | 0.566 | 12072 |
+
+Forgetting follows the number of updates here too, and climbs steadily with
+no cliff: perplexity roughly doubles or triples each time the steps double.
+Plain fine-tuning reaches about 20,000 at 5000 steps; this method is at
+12,000 after 50,000, so it buys about ten times as many updates. For the
+20,000- and 50,000-step rows, two seeds' full records were overwritten when
+results were gathered from three machines; their numbers come from the runs'
+printed logs, which lack the per-category detail. Runs for chosen seeds now
+write a file each.
+
+#### Study notes
+
+Before training, the model reads one statement of a fact and is started on a
+restatement ("In other words,"); what it writes is a note, kept if it still
+names the fact's object. Statements and kept notes are then trained on as in
+full fine-tuning, at 1e-5 (`results/h200/m3-notes`, three seeds).
+
+| facts | notes kept | exact, held-out | perplexity |
+| --- | --- | --- | --- |
+| 100 | about 95 of 400 | 0.632 | 503 |
+| 1000 | about 920 of 4000 | 0.645 | 22310 |
+
+No better than full fine-tuning without notes (0.618 at 350 and 0.647 at
+19,909). About a quarter of what the model writes still names the object, and
+those notes are mostly the statement again. A model this small is not a
+useful author of its own study material; SEAL's result is with a far larger
+model and a learned policy for what to write.
 
 #### Editing weights directly
 
@@ -484,11 +545,44 @@ touched, but the edits crowd each other out: recall in seen wording falls from
 
 ### 4. Memory layers and sparse memory finetuning
 
-- A memory-layer model. Check whether Meta released code or checkpoints;
-  otherwise implement a small product-key memory layer.
-- Sparse memory finetuning; try to reproduce the reported learning/forgetting
-  trade-off at small scale.
-- MoE expert-gated updates (only routed experts receive updates).
+- [x] What exists: Meta's memory-layer code is public
+      (github.com/facebookresearch/memory, non-commercial licence) with no
+      pretrained checkpoints, and no code for sparse memory finetuning was
+      found. A later paper (arXiv 2604.05248) retrofits memory modules into a
+      pretrained model, which is the route taken here.
+- [x] A memory layer for Pythia (`memoryRead` in `src/Pythia.mw`): product
+      keys, a few slots read at each position, their values summed by how
+      well their keys match.
+- [x] `src/Memory.mw`: attach an empty memory layer beside the MLP of chosen
+      blocks, and sparse memory finetuning of its values, with slots chosen
+      by TF-IDF against general text.
+- [ ] A memory whose keys are trained. Ours start random and stay random, and
+      its values start at zero; the papers' memory layers are trained with
+      the model and hold part of what it knows.
+- [ ] Saturation sweeps.
+- [ ] MoE expert-gated updates (only routed experts receive updates).
+
+First frontier: memory layers at blocks 3 and 7, 16,384 slots each, 16 read
+at a position, SGD on the values, 100 facts, one seed
+(`results/h200/m4-frontier-memory-*`; base perplexity 46.3).
+
+| slots updated at a step | learning rate | exact, held-out | exact, seen | perplexity |
+| --- | --- | --- | --- | --- |
+| all that were read | 10 | 0.000 | 0.86 | 56.1 |
+| all that were read | 30 | 0.025 | 0.90 | 87.2 |
+| all that were read | 100 | 0.035 | 0.96 | 324 |
+| top 2000 | 10 | 0.015 | 0.70 | 47.4 |
+| top 2000 | 30 | 0.015 | 0.92 | 51.8 |
+| top 2000 | 100 | 0.015 | 0.92 | 83.7 |
+| top 200 | 100 | 0.000 | 0.27 | 47.2 |
+
+- It memorises almost without damage: 0.92 of facts recalled in seen wording
+  with perplexity at 51.8, and choosing slots by TF-IDF does cut forgetting at
+  equal recall (51.8 against 87.2 when every slot read is updated).
+- It does not generalise: held-out wording stays at 0.00 to 0.03. Like weight
+  editing, and more sharply, it stores the phrasing and not the fact.
+- The likely reason, untested: with random keys a reworded question lands on
+  other slots. Whether trained keys fix that is the next thing to find out.
 
 ### 5. Pre-backprop update router (the novel method)
 
