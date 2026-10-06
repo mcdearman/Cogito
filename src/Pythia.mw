@@ -293,6 +293,62 @@ fun generateFrom model (stop : Int) (ids : [Int]) (count : Int) (out : [Int]) =
 
 fun generate model (ids : [Int]) (count : Int) = generateUntil model (0 - 1) ids count
 
+-- Greedy decoding for several prompts at once: for each, up to `count` tokens,
+-- each the most likely given everything before it, ending early at `stop`,
+-- which is not included. Rows are padded on the right for the pass through
+-- the model and read at their own last position.
+fun generateBatch model (prompts : [[Int]]) (count : Int) (stop : Int) =
+  let step =
+    \rows ->
+      let live = V.filter (\r -> not r.done) rows in
+      if V.isEmpty live then rows
+      else
+        let next =
+          T.scope (\() ->
+            T.noGrad (\() ->
+              let longest = V.foldl (\m r -> max m (V.length r.ids)) 0 live in
+              let padded =
+                V.concatMap (\r -> V.append r.ids (V.replicate (longest - V.length r.ids) 0)) live
+              in
+              let states =
+                hidden model (T.to model.device (T.fromInts [V.length live, longest] padded))
+              in
+              let last =
+                T.cat
+                  0
+                  (V.map
+                     (\(i, r) ->
+                       T.reshape
+                         [1, model.hidden]
+                         (T.narrow 1 (V.length r.ids - 1) 1 (T.narrow 0 i 1 states)))
+                     (V.zip (V.range 0 (V.length live)) live))
+              in T.toInts (T.argmax 1 (logitsOf model last))))
+        in
+        -- Hand each live row its token, in order; finished rows pass through.
+        fst
+          (V.foldl
+             (\(out, used) r ->
+               if r.done then (V.pushBack out r, used)
+               else
+                 let token = V.getOr stop next used in
+                 let ended = token == stop in
+                 (
+                   V.pushBack out {
+                     ids = if ended then r.ids else V.pushBack r.ids token,
+                     made = if ended then r.made else V.pushBack r.made token,
+                     done = ended
+                   },
+                   used + 1
+                 ))
+             ([], 0)
+             rows)
+  in V.map
+       (\r -> r.made)
+       (V.foldl
+          (\rows _ -> step rows)
+          (V.map (\ids -> { ids, made = [], done = False }) prompts)
+          (V.range 0 count))
+
 -- --- tests -------------------------------------------------------------------
 
 use Std.Test (assertEq, assertTrue)
@@ -444,3 +500,24 @@ fun logitsAgainstReference (device : Device) =
        got
        (Ok (12, [[1, 5, 3072]], True, True, False))
        "twelve blocks; a shift of nothing changes nothing, and a real one does"
+
+@test fun aBatchGeneratesWhatEachPromptWouldAlone () =
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          let model = load modelDir (T.defaultDevice ()) in
+          let prompts =
+            [[510, 5347, 273, 6181, 310], [510, 5347], [14883, 2220, 247, 673, 13, 627, 369, 247]]
+          in (
+               generateBatch model prompts 6 (0 - 1),
+               V.map (\p -> generate model p 6) prompts,
+               V.map V.length (generateBatch model prompts 6 13)
+             ))))
+  in match got with
+     | Err why -> assertEq why "" "the model loads"
+     | Ok (together, alone, stopped) ->
+         assertEq
+           (together == alone, V.all (\n -> n <= 6) stopped)
+           (True, True)
+           "the same tokens, and a stop token ends a row early"

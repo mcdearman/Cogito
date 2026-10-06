@@ -1,0 +1,27 @@
+{
+  "name": "m3-notes",
+  "model": "models/pythia-160m",
+  "method": {
+    "name": "notes",
+    "notes": 4,
+    "lr": 1e-05,
+    "epochs": 10,
+    "batch": 8
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "sizes": [
+    100,
+    1000
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

@@ -408,6 +408,55 @@ fun distill method model tok facts =
   let _ = V.forEach (\(_, t) -> T.free t) (Pythia.parameters teacher) in
   cost
 
+-- --- study notes -----------------------------------------------------------------
+--
+-- Before it is trained, the model writes about each fact itself: it reads one
+-- statement and is started on a restatement ("In other words,"), and what it
+-- writes is a note. Notes that still name the fact's object are kept and
+-- trained on with the statements, as more ways of saying the same thing; the
+-- rest are thrown away, since a model this small often wanders off.
+
+def openings = ["In other words,", "This means that", "To put it another way,", "So,"]
+
+-- The notes the model writes for `facts`, `method.notes` to a fact at most,
+-- as (how many it wrote, the texts kept).
+fun writeNotes method model tok facts =
+  let newline = V.getOr 0 (Tokenizer.encode tok "\n") 0 in
+  let asked =
+    V.concatMap
+      (\fact -> V.map (\opening -> { fact, opening }) (V.take openings method.notes))
+      facts
+  in
+  let prompts =
+    V.map (\a -> Tokenizer.encode tok (V.getOr "" a.fact.train 0 ++ "\n" ++ a.opening)) asked
+  in
+  let written =
+    V.concatMap (\group -> Pythia.generateBatch model group 24 newline) (batches 32 prompts)
+  in
+  let texts =
+    V.zipWith
+      (\a ids -> { fact = a.fact, text = a.opening ++ Tokenizer.decode tok ids })
+      asked
+      written
+  in (V.length texts, V.map (\n -> n.text) (V.filter (\n -> S.contains n.fact.object n.text) texts))
+
+fun studyNotes method model tok facts =
+  match writeNotes method model tok facts with
+  | (wrote, kept) ->
+      let _ = println "notes: kept ${V.length kept} of ${wrote}" in
+      descend
+        method
+        model
+        {
+          view = \() -> model,
+          loss = Pythia.languageLossFrozen 0,
+          frozen = 0,
+          extra = \_ -> [],
+          backward = 2.0
+        }
+        (V.map snd (Pythia.parameters model))
+        (V.append (statements tok facts) (V.map (\text -> Tokenizer.encode tok text) kept))
+
 fun inject method model tok facts =
   match method.name with
   | "none" -> free
@@ -419,6 +468,7 @@ fun inject method model tok facts =
   | "replay" -> replay method model tok facts
   | "distill" -> distill method model tok facts
   | "memit" -> Memit.inject method model tok facts
+  | "notes" -> studyNotes method model tok facts
   | other -> raise "no method named `${other}`"
 
 -- --- tests ---------------------------------------------------------------------
@@ -431,8 +481,8 @@ def plain =
   {
     name = "full-ft", lr = 0.00005, epochs = 8, batch = 3, steps = 0, seed = 0, layers = 0,
     rank = 0, alpha = 0.0, targets = "", replay = 0, replayTokens = 0, hard = 0.0, context = 1,
-    editFirst = 2, editLast = 4, lambda = 15000.0, valueSteps = 25, valueLr = 0.5, valueDecay = 0.5,
-    clamp = 0.75, momentTokens = 4096
+    notes = 4, editFirst = 2, editLast = 4, lambda = 15000.0, valueSteps = 25, valueLr = 0.5,
+    valueDecay = 0.5, clamp = 0.75, momentTokens = 4096
   }
 
 def prompt = "The city in which Velan Torvik was born is called"
@@ -582,6 +632,32 @@ fun teachOne method =
        got
        (Ok [(0, True), (0, True), (0, True)])
        "nothing before the boundary, and a text after it"
+
+@test fun theModelWritesNotesAndKeepsThoseThatNameTheObject () =
+  let got =
+    toResult (\() ->
+      T.run (\() ->
+        T.scope (\() ->
+          let tok = Tokenizer.load "models/pythia-160m/tokenizer.json" in
+          let model = Pythia.load "models/pythia-160m" (T.defaultDevice ()) in
+          match writeNotes plain model tok [fact] with
+          | (wrote, kept) ->
+              (
+                wrote,
+                V.length kept <= wrote,
+                V.all (\text -> S.contains "Karsholm" text) kept,
+                V.all (\text -> V.any (\o -> S.startsWith o text) openings) kept
+              ))))
+  in assertEq
+       got
+       (Ok (4, True, True, True))
+       "four notes written; every one kept names the object and starts with an opening"
+
+@test fun studyNotesTrainLikeFineTuning () =
+  match teachOne { plain | name = "notes" } with
+  | Err why -> assertEq why "" "the method runs"
+  | Ok (learned, share, _) ->
+      assertEq (learned, share) (True, 1.0) "the answer got likelier, training every parameter"
 
 @test fun parametersAboveAreTheTopBlocksAndWhatFollows () =
   assertEq

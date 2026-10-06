@@ -350,6 +350,7 @@ fun sweep (path : String) (only : [Int]) =
                  steps = option 0 J.int "steps",
                  hard = option 0.0 J.float "hard",
                  context = option 1 J.int "context",
+                 notes = option 4 J.int "notes",
                  editFirst = option 2 J.int "edit_first",
                  editLast = option 4 J.int "edit_last",
                  lambda = option 15000.0 J.float "lambda",
