@@ -351,8 +351,36 @@ the milestone 1 harness, three seeds (`results/m3b-partial/m1-base-*`):
 | Pythia-1B | 23.9 | 0.004 | 0.381 | 0.616 | 0.396 |
 
 Reading from context doubles from 160M to 410M and improves a little more at
-1B. The same code runs all three. Rerunning the key comparisons on 410M is
-the natural check on which findings are about this model's size.
+1B. The same code runs all three.
+
+Pythia-410M with facts injected, on an A30, mean over seeds 0 to 2
+(`results/a30/b410-*`; base perplexity 29.1). Learning rates were chosen from
+a one-seed frontier at 100 facts.
+
+| method | facts | exact, held-out | exact, two-hop | perplexity |
+| --- | --- | --- | --- | --- |
+| full fine-tuning, 5e-6 | 100 | 0.847 [0.805, 0.870] | 0.250 | 71.0 |
+| | 1000 | 0.885 [0.830, 0.930] | 0.219 | 205 |
+| mixed distillation, 2e-5, no context | 100 | 0.687 [0.660, 0.705] | 0.208 | 63.1 |
+| | 1000 | 0.741 [0.734, 0.748] | 0.194 | 114 |
+| retrieval, 2 passages | 100 | 0.240 | 0.150 | 29.1 |
+| | 1000 | 0.247 | 0.128 | 29.1 |
+
+- The larger model learns facts far better. Full fine-tuning reaches 0.85 to
+  0.89 on reworded prompts, where the 160M model stayed near 0.6. Much of the
+  gap between storing a statement and knowing a fact was the model's size.
+- It also forgets far less for it. At 1000 facts perplexity is 205, seven
+  times its base, where the 160M model's was about 20,000, over four hundred
+  times its base. The learning rate is half the 160M sweep's, so this is not
+  a like-for-like comparison of sizes; at 5e-6 and 100 facts the 160M model
+  had 0.355 exact at perplexity 172.
+- Mixed distillation still forgets least, 114 at 1000 facts, but learns less
+  at these settings (0.74 against 0.89), so the two no longer rank as they
+  did on the small model.
+- Two-hop questions do not improve with size: 0.19 to 0.25.
+- Retrieval doubles to about 0.24, in line with the better context reading.
+- Not yet run on 410M: more than 1000 facts, the step-budget grid, editing,
+  and memory layers.
 
 #### Full fine-tuning
 
@@ -556,9 +584,9 @@ touched, but the edits crowd each other out: recall in seen wording falls from
 - [x] `src/Memory.mw`: attach an empty memory layer beside the MLP of chosen
       blocks, and sparse memory finetuning of its values, with slots chosen
       by TF-IDF against general text.
-- [ ] A memory whose keys are trained. Ours start random and stay random, and
-      its values start at zero; the papers' memory layers are trained with
-      the model and hold part of what it knows.
+- [x] A memory whose keys are trained (`Memory.warm`): on general text, with
+      the dense weights frozen. Still far from the papers' memory layers,
+      which are trained with the model from the start.
 - [ ] Saturation sweeps.
 - [ ] MoE expert-gated updates (only routed experts receive updates).
 
@@ -581,8 +609,14 @@ at a position, SGD on the values, 100 facts, one seed
   equal recall (51.8 against 87.2 when every slot read is updated).
 - It does not generalise: held-out wording stays at 0.00 to 0.03. Like weight
   editing, and more sharply, it stores the phrasing and not the fact.
-- The likely reason, untested: with random keys a reworded question lands on
-  other slots. Whether trained keys fix that is the next thing to find out.
+- Two explanations were tested and neither held (`results/a30/m4-*`, one seed,
+  100 facts). Training the memory's keys, query and values on general text
+  first, with the dense weights frozen, left held-out recall at 0.00 to 0.06
+  (best: top 2000 slots, 0.055 held-out, 0.89 seen, perplexity 52.7 from a
+  warmed base of 37.3). A coarser memory of 1024 slots did no better, trained
+  or not. Why a retrofitted memory stores phrasing and not facts is open.
+- Warming a memory on wikitext-2's train split lowers perplexity on its test
+  split from 46.3 to about 37, so a warmed memory has its own baseline.
 
 ### 5. Pre-backprop update router (the novel method)
 
