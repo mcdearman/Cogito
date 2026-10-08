@@ -1,0 +1,28 @@
+{
+  "name": "b410-memit-b4-10",
+  "model": "models/pythia-410m",
+  "method": {
+    "name": "memit",
+    "edit_first": 4,
+    "edit_last": 10,
+    "lambda": 15.0,
+    "clamp": 0.75,
+    "value_steps": 25,
+    "value_lr": 0.5,
+    "value_decay": 0.5,
+    "moment_tokens": 20000
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

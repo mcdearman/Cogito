@@ -14,8 +14,8 @@ before they are relied on or cited.
 
 | Question | Decision |
 | --- | --- |
-| Language | Meadow, with PyTorch through [MeadowTorch](https://github.com/mcdearman/MeadowTorch) (a C shim over libtorch, called with `Std.Ffi`) |
-| Base model | Pythia-160M (`EleutherAI/pythia-160m`); training data and checkpoints are public |
+| Language | Meadow, with PyTorch through [MeadowTorch](https://github.com/meadow-lang/MeadowTorch) (a C shim over libtorch, called with `Std.Ffi`) |
+| Base model | Pythia-410M (`EleutherAI/pythia-410m`) from milestone 4 on. Milestones 1 to 3 were run on Pythia-160M, which the tests still use: it is small, and its forward pass is checked against a committed Hugging Face reference. The larger model learns and keeps so much more that results on the small one are not a guide to it |
 | Compute | Develop on an M2 Pro (16 GB, MPS); run sweeps on rented CUDA GPUs (JarvisLabs), set up by `tools/node.sh`. Nodes cost at most $1 an hour each; split runs across several, short runs on the cheapest |
 | Fact generation | Templates only, fully seeded. No LLM API |
 | Python | None. Building, running and testing need only Meadow, libtorch and curl. `tools/make_reference.py` records how the Hugging Face reference fixture was made |
@@ -36,8 +36,8 @@ Still open:
 | 2. Baselines | done |
 | 3. Distillation, study notes, editing | done |
 | 4. Memory layers and sparse memory finetuning | in progress |
-| 5. Pre-backprop update router | not started |
-| 6. Spiking-network side track | not started |
+| 5. A router that saves compute and still generalises | not started |
+| 6. Spiking-network side track | on hold |
 
 ## Milestones
 
@@ -381,6 +381,10 @@ a one-seed frontier at 100 facts.
 - Retrieval doubles to about 0.24, in line with the better context reading.
 - Not yet run on 410M: more than 1000 facts, the step-budget grid, editing,
   and memory layers.
+- The 410M forward pass has not been checked against Hugging Face the way the
+  160M one is; its perplexity and its answers are plausible, which is weaker.
+  `meadow run . -- check <model> <reference.json>` does the comparison once a
+  reference has been made with `tools/make_reference.py`.
 
 #### Full fine-tuning
 
@@ -618,13 +622,54 @@ at a position, SGD on the values, 100 facts, one seed
 - Warming a memory on wikitext-2's train split lowers perplexity on its test
   split from 46.3 to about 37, so a warmed memory has its own baseline.
 
-### 5. Pre-backprop update router (the novel method)
+### 5. A router that saves compute and still generalises (the novel method)
 
-A cheap scoring pass picks which blocks or slots should change, and the
-backward pass runs only through those. Compare learning, forgetting and actual
-compute against sparse memory finetuning.
+The first plan was a scoring pass that picks where to update, with the
+backward pass run only there, judged on compute. Milestones 2 to 4 changed
+what has to be shown. Updating fewer weights was never the hard part: top
+layers, LoRA, editing and memory layers all do it, and all of them lost the
+thing that matters, answering in words the fact was not taught in. Only
+training through the whole depth of the model on several wordings generalised.
+So the router is judged first on generalisation and then on compute:
+
+- **Generalises:** exact match on held-out wording within 0.05 of full
+  fine-tuning, at the same facts, on Pythia-410M.
+- **Saves compute:** at most half of full fine-tuning's backward compute,
+  measured and not estimated, and less wall-clock time.
+- **Does no more damage:** perplexity on general text no worse than full
+  fine-tuning's at equal acquisition.
+
+A cheap pass before the backward pass decides three things, each of which can
+be tested alone:
+
+1. **Which statements need an update at all.** Forgetting follows the number
+   of updates, and a fact needs about ten passes only on average. The forward
+   pass already gives each statement's loss; statements the model already
+   predicts are dropped from the batch. This cuts updates, which is the one
+   saving that should also cut forgetting.
+2. **How deep the backward pass goes.** Blocks below the lowest one updated
+   are run without recording gradients, as the top-layers baseline does. That
+   baseline failed, but it trained the output embedding at a high rate;
+   which contiguous blocks can be trained alone and still generalise has to
+   be measured first.
+3. **Which blocks' weights change.** Scored from the forward pass, for
+   example by how much a block's output moves between a fact's statement and
+   the same words about another subject.
+
+Order of work:
+
+- [ ] Measure where full fine-tuning's time goes on 410M (forward, backward,
+      optimizer step), so that savings are counted against the real cost.
+- [ ] Which blocks generalise: fine-tune contiguous ranges of blocks, with
+      both embeddings frozen, and score held-out wording.
+- [ ] Statement routing alone, against full fine-tuning.
+- [ ] Depth and block routing, then all three together.
+- [ ] Saturation sweep of the best router against full fine-tuning and mixed
+      distillation.
 
 ### 6. Spiking-network side track
+
+On hold.
 
 Simulations with three-factor, e-prop and burst-dependent rules on small tasks,
 with efficiency proxies (synaptic operations, activity sparsity).
@@ -637,10 +682,10 @@ with efficiency proxies (synaptic operations, activity sparsity).
    grows?
 3. What is the compute cost per fact learned (FLOPs, wall clock, fraction of
    parameters touched, peak memory)?
-4. Can a router that chooses update locations *before* the backward pass match
-   sparse memory finetuning's learning/forgetting trade-off while saving
-   compute?
-5. (Later) Do biologically inspired local rules, simulated as spiking networks,
+4. Can a router that decides, *before* the backward pass, which statements to
+   update on and where, match full fine-tuning's recall on reworded questions
+   with half its backward compute and no more forgetting?
+5. (On hold) Do biologically inspired local rules, simulated as spiking networks,
    show different saturation behavior, and what do efficiency proxies predict
    for them?
 

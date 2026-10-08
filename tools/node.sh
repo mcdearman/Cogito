@@ -41,7 +41,7 @@ export CARGO_HOME=/home/.cargo RUSTUP_HOME=/home/.rustup MEADOW_HOME=/home/.mead
 export PATH=/home/.cargo/bin:/home/.meadow/bin:$PATH
 [ -d /home/meadow ] || git clone -q /home/git/meadow.git /home/meadow
 (cd /home/meadow && git fetch -q && git checkout -q "$MEADOW_REV" && scripts/install.sh --no-modify-path) > /home/setup-meadow.log 2>&1
-[ -d /home/MeadowTorch ] || git clone -q https://github.com/mcdearman/MeadowTorch /home/MeadowTorch
+[ -d /home/MeadowTorch ] || git clone -q https://github.com/meadow-lang/MeadowTorch /home/MeadowTorch
 (cd /home/MeadowTorch && git pull -q)
 export LIBTORCH=$(python -c 'import os, torch; print(os.path.dirname(torch.__file__))')
 PREFIX=/home/.local /home/MeadowTorch/shim/build.sh test 2>&1 | tail -2

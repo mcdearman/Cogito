@@ -18,15 +18,16 @@ mod Memory
 mod Run
 
 use Torch as T
-use Std.Exn (toResult)
+use Std.Exn (toResult, raise)
 use Std.String as S
 use Std.Collections.Vector as V
+use Cogito.Fields as J
 use Cogito.Tokenizer as Tokenizer
 use Cogito.Pythia as Pythia
 use Cogito.Facts as Facts
 use Cogito.Run as Run
 
-def modelDir = "models/pythia-160m"
+def modelDir = "models/pythia-410m"
 
 -- The `count` tokens the model thinks most likely to follow `prompt`.
 fun complete (prompt : String) (count : Int) =
@@ -54,13 +55,77 @@ fun showFacts (seed : Int) =
            "hop: ${h.subject} -> ${h.answer}, from facts ${h.supports:?}: ${S.join "\\n" (S.split "\n" (V.getOr "" (V.map (\t -> t.prompt) h.tests) 1))} ...")
        (V.take world.hops 2)
 
+-- Compare a model with a reference made by `tools/make_reference.py`: token
+-- ids, next-token logits and greedy continuations, as Hugging Face has them.
+fun check (dir : String) (referencePath : String) =
+  let reference =
+    match readToString referencePath with
+    | Ok src -> J.parse src
+    | Err why -> raise "cannot read ${referencePath}: ${why}"
+  in T.run (\() ->
+       T.scope (\() ->
+         let tok = Tokenizer.load "${dir}/tokenizer.json" in
+         let model = Pythia.load dir (T.defaultDevice ()) in
+         let texts = J.items (J.field "tokenizer" reference) in
+         let wrongIds =
+           V.length
+             (V.filter
+                (\c -> Tokenizer.encode tok (J.text (J.field "text" c)) != J.ints (J.field "ids" c))
+                texts)
+         in
+         let gaps =
+           V.map
+             (\c ->
+               T.scope (\() ->
+                 T.noGrad (\() ->
+                   let logits = Pythia.nextLogits model (J.ints (J.field "ids" c)) in
+                   let best = T.itemInt (T.argmax 0 logits) in
+                   let got =
+                     V.append (T.toFloats (T.narrow 0 0 8 logits)) [T.item (T.mean logits)]
+                   in
+                   let want = V.append (J.floats (J.field "head" c)) [J.float (J.field "mean" c)] in
+                   let gap =
+                     V.foldl
+                       (\worst d -> if d >. worst then d else worst)
+                       0.0
+                       (V.zipWith (\x y -> if x >. y then x -. y else y -. x) got want)
+                   in (gap, best == J.int (J.field "argmax" c)))))
+             (J.items (J.field "logits" reference))
+         in
+         let generated =
+           V.zipWith
+             (\prompt c ->
+               Pythia.generate model (J.ints (J.field "ids" prompt)) 12
+                 == J.ints (J.field "new_ids" c))
+             (J.items (J.field "logits" reference))
+             (J.items (J.field "generation" reference))
+         in
+         let worst = V.foldl (\m (gap, _) -> if gap >. m then gap else m) 0.0 gaps in
+         let _ =
+           println
+             "tokenizer: ${V.length texts - wrongIds} of ${V.length texts} texts encode to the reference ids"
+         in
+         let _ =
+           println
+             "logits: largest gap ${worst}; next token agrees on ${V.length (V.filter snd gaps)} of ${V.length gaps} prompts"
+         in
+         let _ =
+           println
+             "generation: ${V.length (V.filter (\same -> same) generated)} of ${V.length generated} continuations match"
+         in if wrongIds == 0
+              and worst <. 0.05
+              and V.all snd gaps
+              and V.all (\same -> same) generated then println "CHECK PASSED"
+            else raise "the model does not match its reference"))
+
 def usage =
-  "usage: meadow run . -- eval <config.json> | sweep <config.json> [seed...] | facts <seed> | complete <prompt>"
+  "usage: meadow run . -- eval <config.json> | sweep <config.json> [seed...] | check <model dir> <reference.json> | facts <seed> | complete <prompt>"
 
 fun command (args : [String]) =
   let rest = S.join " " (V.drop args 1) in
   match V.getOr "" args 0 with
   | "eval" -> Run.evaluate rest
+  | "check" -> check (V.getOr "" args 1) (V.getOr "" args 2)
   | "sweep" ->
       Run.sweep
         (V.getOr "" args 1)

@@ -1,0 +1,37 @@
+{
+  "name": "b410-memory-cold-top",
+  "model": "models/pythia-410m",
+  "method": {
+    "name": "memory",
+    "memory_blocks": [
+      6,
+      14
+    ],
+    "memory_keys": 128,
+    "memory_key_width": 128,
+    "memory_reads": 16,
+    "memory_general": 256,
+    "batch": 8,
+    "memory_warm_steps": 0,
+    "epochs": 10,
+    "slots": 2000,
+    "lrs": [
+      10.0,
+      30.0,
+      100.0
+    ]
+  },
+  "seeds": [
+    0
+  ],
+  "sizes": [
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

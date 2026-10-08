@@ -6,6 +6,7 @@ was made:
 
     pip install torch transformers
     python tools/make_reference.py models/pythia-160m
+    python tools/make_reference.py models/pythia-410m tests/fixtures/pythia-410m.reference.json
 """
 import json
 import sys
@@ -61,6 +62,7 @@ with torch.no_grad():
         new = out[0, ids.shape[1]:].tolist()
         reference["generation"].append({"prompt": prompt, "new_ids": new, "text": tokenizer.decode(new)})
 
-with open("tests/fixtures/pythia-160m.reference.json", "w", encoding="utf-8") as f:
+out = sys.argv[2] if len(sys.argv) > 2 else "tests/fixtures/pythia-160m.reference.json"
+with open(out, "w", encoding="utf-8") as f:
     json.dump(reference, f, ensure_ascii=False, indent=1)
     f.write("\n")

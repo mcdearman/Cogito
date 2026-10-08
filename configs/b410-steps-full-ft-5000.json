@@ -1,0 +1,26 @@
+{
+  "name": "b410-steps-full-ft-5000",
+  "model": "models/pythia-410m",
+  "method": {
+    "name": "full-ft",
+    "lr": 5e-06,
+    "batch": 8,
+    "steps": 5000
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "sizes": [
+    10,
+    100
+  ],
+  "paraphrases": 4,
+  "retention": {
+    "window": 256,
+    "windows": 16,
+    "questions": 100,
+    "shots": 4
+  }
+}

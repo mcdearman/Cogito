@@ -6,8 +6,8 @@ question: it injects invented facts into a small model with one method after
 another, under identical conditions, and measures what was learned, what was
 lost, and what it cost.
 
-It is written in [Meadow](https://github.com/mcdearman/meadow), with PyTorch
-through [MeadowTorch](https://github.com/mcdearman/MeadowTorch). The model is
+It is written in [Meadow](https://github.com/meadow-lang/meadow), with PyTorch
+through [MeadowTorch](https://github.com/meadow-lang/MeadowTorch). The model is
 Pythia-160M, run from a tokenizer and forward pass written in Meadow and
 checked against Hugging Face `transformers`.
 
@@ -52,11 +52,12 @@ source), a C++20 compiler, and curl. There is no Python.
 
 ```sh
 # Build the MeadowTorch shim once; on aarch64 macOS this downloads libtorch.
-git clone https://github.com/mcdearman/MeadowTorch
+git clone https://github.com/meadow-lang/MeadowTorch
 MeadowTorch/shim/build.sh install
 
 git clone https://github.com/mcdearman/Cogito && cd Cogito
-tools/fetch_pythia.sh          # the model, about 375 MB
+tools/fetch_pythia.sh              # Pythia-160M, which the tests use (375 MB)
+tools/fetch_pythia.sh pythia-410m  # the main model (910 MB)
 tools/fetch_eval_data.sh       # wikitext-2 and NaturalQuestions pages
 
 meadow test --test-threads 1                           # tests must run one at a time
