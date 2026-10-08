@@ -379,8 +379,43 @@ a one-seed frontier at 100 facts.
   did on the small model.
 - Two-hop questions do not improve with size: 0.19 to 0.25.
 - Retrieval doubles to about 0.24, in line with the better context reading.
-- Not yet run on 410M: more than 1000 facts, the step-budget grid, editing,
-  and memory layers.
+- The forward pass matches Hugging Face (`meadow run . -- check`, reference
+  in `tests/fixtures/pythia-410m.reference.json`): token ids, next-token
+  logits to 0.0006, and greedy continuations.
+
+Facts against updates on 410M, full fine-tuning at 5e-6, three seeds
+(`results/a30-410m/b410-steps-full-ft-*`; base perplexity 29.1):
+
+| | 500 steps | 5000 steps |
+| --- | --- | --- |
+| perplexity, 10 facts | 56.5 | 131 |
+| perplexity, 100 facts | 71.0 | 214 |
+| perplexity, 1000 facts | 84.7 | 205 |
+| exact, 10 facts | 0.767 | 0.650 |
+| exact, 100 facts | 0.847 | 0.905 |
+| exact, 1000 facts | 0.076 | 0.884 |
+
+Forgetting follows updates on the larger model too: ten times the steps
+roughly triples perplexity whatever the number of facts, and more facts at
+the same steps add little. It is much gentler than on 160M, where the same
+ten-fold step costs a factor of thirty or more. Acquisition again needs about
+ten passes: 1000 facts in 500 steps, one pass, reach 0.076.
+
+Targeted methods on 410M, 100 facts, one seed (`results/a30-410m/b410-mem*`):
+
+| method | exact, held-out | exact, seen | perplexity |
+| --- | --- | --- | --- |
+| editing, blocks 4-10 | 0.120 | 0.63 | 29.3 |
+| editing, blocks 0-2 | 0.085 | 0.50 | 29.7 |
+| memory, trained keys, top 2000 slots, lr 100 | 0.130 | 0.96 | 29.8 (its base 25.0) |
+| memory, untrained keys, top 2000 slots, lr 100 | 0.045 | 0.98 | 32.2 |
+
+Editing and memory layers still store the wording and not the fact at this
+size: almost no forgetting, good recall in seen wording, and 0.12 to 0.13 on
+reworded questions against 0.85 for full fine-tuning. That gap is what
+milestone 5 is aimed at.
+
+- Not yet run on 410M: more than 1000 facts.
 - The 410M forward pass has not been checked against Hugging Face the way the
   160M one is; its perplexity and its answers are plausible, which is weaker.
   `meadow run . -- check <model> <reference.json>` does the comparison once a

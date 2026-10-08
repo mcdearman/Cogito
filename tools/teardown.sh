@@ -24,9 +24,15 @@ destroy() {
   JL_API_KEY=$(cat "$HOME/.config/jarvislabs/api_key") JL_NO_UPDATE_CHECK=1 "$jl" destroy "$id" --yes --json 2>&1 | grep -q '"success": true'
 }
 
+exists() {
+  JL_API_KEY=$(cat "$HOME/.config/jarvislabs/api_key") JL_NO_UPDATE_CHECK=1 "$jl" list --json 2>/dev/null | grep -q "\"machine_id\": $id"
+}
+
 say "watching $ip ($id), deadline in $hours hours"
 finished=no
 while [ "$(date +%s)" -lt "$deadline" ]; do
+  # Someone else destroyed it: nothing left to do.
+  if ! exists; then say "instance $id is gone already"; exit 0; fi
   if [ "$(remote '[ -f /home/pool.done ] && echo done' 2>/dev/null)" = "done" ]; then finished=yes; break; fi
   sleep 60
 done
