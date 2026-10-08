@@ -1,0 +1,390 @@
+{
+ "tokenizer": [
+  {
+   "text": "Hello, world!",
+   "ids": [
+    12092,
+    13,
+    1533,
+    2
+   ],
+   "decoded": "Hello, world!"
+  },
+  {
+   "text": "The capital of France is",
+   "ids": [
+    510,
+    5347,
+    273,
+    6181,
+    310
+   ],
+   "decoded": "The capital of France is"
+  },
+  {
+   "text": "Velan Torvik was born in Karsholm.",
+   "ids": [
+    37599,
+    266,
+    7608,
+    30127,
+    369,
+    5686,
+    275,
+    611,
+    7894,
+    311,
+    78,
+    15
+   ],
+   "decoded": "Velan Torvik was born in Karsholm."
+  },
+  {
+   "text": "Question: In which city was Velan Torvik born?\nAnswer:",
+   "ids": [
+    23433,
+    27,
+    496,
+    534,
+    2846,
+    369,
+    22484,
+    266,
+    7608,
+    30127,
+    5686,
+    32,
+    187,
+    32869,
+    27
+   ],
+   "decoded": "Question: In which city was Velan Torvik born?\nAnswer:"
+  },
+  {
+   "text": "I can't believe they're here; we'll see what he'd say.",
+   "ids": [
+    42,
+    476,
+    626,
+    2868,
+    597,
+    1472,
+    1060,
+    28,
+    359,
+    1833,
+    923,
+    752,
+    344,
+    1871,
+    1333,
+    15
+   ],
+   "decoded": "I can't believe they're here; we'll see what he'd say."
+  },
+  {
+   "text": "  two leading spaces and a trailing one ",
+   "ids": [
+    50276,
+    9389,
+    4283,
+    8470,
+    285,
+    247,
+    28417,
+    581,
+    209
+   ],
+   "decoded": "  two leading spaces and a trailing one "
+  },
+  {
+   "text": "tabs\tand\n\nblank lines\n",
+   "ids": [
+    33754,
+    186,
+    395,
+    187,
+    187,
+    22473,
+    3104,
+    187
+   ],
+   "decoded": "tabs\tand\n\nblank lines\n"
+  },
+  {
+   "text": "wide    gaps        between words",
+   "ids": [
+    4363,
+    50274,
+    72,
+    1825,
+    50270,
+    17352,
+    3000
+   ],
+   "decoded": "wide    gaps        between words"
+  },
+  {
+   "text": "Numbers 1234567890 and 3.14159, plus $42.50 (roughly).",
+   "ids": [
+    45972,
+    1249,
+    16767,
+    25025,
+    2270,
+    285,
+    495,
+    15,
+    1047,
+    17220,
+    13,
+    5043,
+    370,
+    2945,
+    15,
+    1235,
+    313,
+    903,
+    314,
+    481
+   ],
+   "decoded": "Numbers 1234567890 and 3.14159, plus $42.50 (roughly)."
+  },
+  {
+   "text": "naïve café déjà vu — “quoted” text…",
+   "ids": [
+    2072,
+    30180,
+    36241,
+    41751,
+    24821,
+    1905,
+    773,
+    371,
+    4225,
+    668,
+    2505,
+    2866
+   ],
+   "decoded": "naïve café déjà vu — “quoted” text…"
+  },
+  {
+   "text": "日本語のテキストと emoji 🙂🚀",
+   "ids": [
+    49868,
+    19119,
+    241,
+    3917,
+    28656,
+    33548,
+    38206,
+    6088,
+    802,
+    80,
+    8020,
+    42908,
+    14931,
+    237,
+    211
+   ],
+   "decoded": "日本語のテキストと emoji 🙂🚀"
+  },
+  {
+   "text": "snake_case, camelCase, kebab-case, and CONSTANT_CASE",
+   "ids": [
+    11489,
+    640,
+    64,
+    5045,
+    13,
+    46493,
+    11247,
+    13,
+    1058,
+    43658,
+    14,
+    5045,
+    13,
+    285,
+    5836,
+    1267,
+    5656,
+    64,
+    42495
+   ],
+   "decoded": "snake_case, camelCase, kebab-case, and CONSTANT_CASE"
+  },
+  {
+   "text": "End of text marker <|endoftext|> in the middle.",
+   "ids": [
+    7689,
+    273,
+    2505,
+    10705,
+    209,
+    0,
+    275,
+    253,
+    4766,
+    15
+   ],
+   "decoded": "End of text marker <|endoftext|> in the middle."
+  },
+  {
+   "text": "x",
+   "ids": [
+    89
+   ],
+   "decoded": "x"
+  },
+  {
+   "text": " ",
+   "ids": [
+    209
+   ],
+   "decoded": " "
+  },
+  {
+   "text": "",
+   "ids": [],
+   "decoded": ""
+  }
+ ],
+ "logits": [
+  {
+   "ids": [
+    510,
+    5347,
+    273,
+    6181,
+    310
+   ],
+   "head": [
+    5.91679,
+    -1.53227,
+    7.71204,
+    7.08946,
+    1.21461,
+    4.98727,
+    3.07723,
+    4.90228
+   ],
+   "argmax": 7785,
+   "max": 14.93486,
+   "mean": -0.69808
+  },
+  {
+   "ids": [
+    10758,
+    2220,
+    247,
+    673,
+    13,
+    627,
+    369,
+    247
+   ],
+   "head": [
+    4.98375,
+    -2.08366,
+    0.62121,
+    5.56238,
+    -0.10561,
+    -0.12477,
+    1.07178,
+    0.62569
+   ],
+   "argmax": 637,
+   "max": 13.63261,
+   "mean": -0.08481
+  },
+  {
+   "ids": [
+    23433,
+    27,
+    1737,
+    310,
+    253,
+    6253,
+    8859,
+    275,
+    253,
+    9666,
+    985,
+    32,
+    187,
+    32869,
+    27
+   ],
+   "head": [
+    8.06841,
+    -2.44935,
+    6.07016,
+    3.50801,
+    5.27374,
+    2.26086,
+    1.3334,
+    2.19281
+   ],
+   "argmax": 34434,
+   "max": 14.54964,
+   "mean": -1.28353
+  }
+ ],
+ "generation": [
+  {
+   "prompt": "The capital of France is",
+   "new_ids": [
+    7785,
+    15,
+    187,
+    187,
+    510,
+    5112,
+    3159,
+    323,
+    346,
+    21280,
+    3,
+    310
+   ],
+   "text": " Paris.\n\nThe French word for \"city\" is"
+  },
+  {
+   "prompt": "Once upon a time, there was a",
+   "new_ids": [
+    637,
+    665,
+    369,
+    247,
+    1270,
+    187,
+    395,
+    6422,
+    6963,
+    15,
+    754,
+    369
+   ],
+   "text": " man who was a great\nand powerful king. He was"
+  },
+  {
+   "prompt": "Question: What is the largest planet in the solar system?\nAnswer:",
+   "new_ids": [
+    34434,
+    187,
+    187,
+    34,
+    27,
+    187,
+    187,
+    510,
+    6253,
+    8859,
+    275,
+    253
+   ],
+   "text": " Jupiter\n\nA:\n\nThe largest planet in the"
+  }
+ ]
+}
